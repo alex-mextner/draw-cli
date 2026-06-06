@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""draw — generate an image from a text prompt via Hugging Face Inference API.
+
+Usage:
+    draw "a cute robot" -o robot.png
+    draw "a cute robot" --model black-forest-labs/FLUX.1-schnell -o robot.png
+    echo "a cute robot" | draw -o robot.png
+
+Env:
+    HF_TOKEN        Hugging Face access token (required)
+    HF_MODEL        Default model (default: black-forest-labs/FLUX.1-schnell)
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
+
+
+def _token() -> str:
+    token = os.environ.get("HF_TOKEN", "")
+    if not token:
+        sys.stderr.write("draw: HF_TOKEN env var is required\n")
+        sys.exit(1)
+    return token
+
+
+def _default_model() -> str:
+    return os.environ.get("HF_MODEL", DEFAULT_MODEL)
+
+
+def generate(prompt: str, model: str, out_path: str) -> None:
+    try:
+        from huggingface_hub import InferenceClient
+    except ImportError:
+        sys.stderr.write("draw: install huggingface_hub first:  uv tool install huggingface_hub\n")
+        sys.exit(1)
+
+    token = _token()
+    client = InferenceClient(token=token)
+    try:
+        image = client.text_to_image(prompt, model=model)
+    except Exception as e:
+        sys.stderr.write(f"draw: generation failed: {e}\n")
+        sys.exit(1)
+
+    image.save(out_path)
+    print(f"draw: saved {out_path}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Generate an image from a text prompt")
+    ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
+    ap.add_argument("-o", "--out", required=True, help="output image path")
+    ap.add_argument("--model", default=_default_model(), help="HF model id")
+    args = ap.parse_args()
+
+    prompt = args.prompt
+    if not prompt:
+        if not sys.stdin.isatty():
+            prompt = sys.stdin.read().strip()
+        if not prompt:
+            ap.error("prompt is required (arg or stdin)")
+
+    generate(prompt, args.model, args.out)
+
+
+if __name__ == "__main__":
+    main()
