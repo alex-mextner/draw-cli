@@ -17,6 +17,22 @@ import os
 import sys
 
 DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
+ENV_FILE = os.path.expanduser("~/.config/draw-cli/.env")
+
+
+def _load_env() -> None:
+    if not os.path.isfile(ENV_FILE):
+        return
+    with open(ENV_FILE, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.split("#", 1)[0].strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
 
 
 def _token() -> str:
@@ -51,6 +67,7 @@ def generate(prompt: str, model: str, out_path: str) -> None:
 
 
 def main() -> None:
+    _load_env()
     ap = argparse.ArgumentParser(description="Generate an image from a text prompt")
     ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
     ap.add_argument("-o", "--out", required=True, help="output image path")
