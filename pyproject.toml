@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "draw-cli"
+version = "0.1.0"
+description = "Text-to-image from the CLI via Hugging Face."
+requires-python = ">=3.9"
+dependencies = ["huggingface_hub", "Pillow"]
+
+# Script exposure rationale: same as review-cli — single executable at bin/draw
+# with shebang #!/usr/bin/env python3, no importable package. script-files copies
+# it into the installed scripts dir; pipx exposes it via its isolated venv which
+# satisfies huggingface_hub and Pillow. Alternative `[project.scripts]` would need
+# a new wrapper module file pointing at draw.main, which would require creating or
+# modifying source — avoided here per the constraint.
+[tool.setuptools]
+script-files = ["bin/draw"]
