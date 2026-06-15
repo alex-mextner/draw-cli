@@ -2,5 +2,5 @@
 __pycache__/
 *.pyc
 
-# rig harness auto-mode is LOCAL (per-machine via rig apply), not committed
-.claude/
+# Personal per-machine Claude Code settings (committed slot is .claude/settings.json)
+.claude/settings.local.json
