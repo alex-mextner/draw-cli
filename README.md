@@ -93,12 +93,42 @@ echo "a cute robot" | draw -o robot.png
 
 ---
 
+## How draw compares
+
+The other text-to-image CLIs trade off between *simple-but-locked-in* and
+*powerful-but-heavy*. Single-vendor tools (dallecli, openai-cli-art) are one `pip install`
+but hard-wired to OpenAI and a paid key. Model runners (Replicate CLI, simonw `llm`) are
+flexible but route through a paid hosted API or a general LLM harness. Local engines
+(comfy-cli / ComfyUI) are the most capable but pull in a full generative stack and a server.
+
+`draw` is the minimal middle: **one command**, **any Hugging Face text-to-image model** via
+`--model` (FLUX by default), runnable on a **free-tier HF token**, **stdin-pipeable** for
+agent-assembled prompts, and it **registers an agent skill** so harnesses discover it. It
+deliberately does *one* thing — prompt in, image file out — and leaves editing/filtering to
+real image tools.
+
+| Tool | Model-agnostic | Free-tier path | Stdin pipe | No local server | Agent-skill registration | Single-purpose simplicity |
+|---|---|---|---|---|---|---|
+| **draw** | ✓ (any HF model) | ✓ (HF free token) | ✓ | ✓ | ✓ | ✓ |
+| dallecli | — (OpenAI only) | — (paid key) | — | ✓ | — | ~ (also edit/filter) |
+| openai-cli-art | — (OpenAI only) | — (paid key) | ~ | ✓ | — | ~ |
+| Replicate CLI | ✓ (any hosted model) | ~ (free credits) | ✓ | ✓ | — | — (generic runner) |
+| simonw `llm` (+ image plugins) | ✓ (via plugins) | ~ (depends on backend) | ✓ | ~ | — | — (general LLM CLI) |
+| comfy-cli / ComfyUI | ✓ (local + partner) | ✓ (local) | — | — (runs a server) | — | — (full stack) |
+
+`~` = partial. `draw` is not the most powerful — comfy-cli wins on local control and `llm`
+on breadth — but it is the lightest path from a shell prompt to an image file with no vendor
+lock-in and no server to babysit, which is exactly what a coding agent needs for placeholder
+and concept art.
+
 ## Ecosystem
 
 Part of the [HyperIDE.ai](https://hyperide.ai) agent toolchain:
 
 - **[tg-cli](https://github.com/alex-mextner/tg-cli)** — Telegram bridge for agents: push reports, two-way control, Q→buttons
 - **[review-cli](https://github.com/alex-mextner/review-cli)** — multi-model read-only code review
+- **[rig-cli](https://github.com/alex-mextner/rig-cli)** — umbrella dev-env driver: sets up a repo from config — skills, hooks, CI, dep-bootstrap; reconciles drift
+- **[agent-tools](https://github.com/alex-mextner/agent-tools)** — the shared umbrella: portable agent skills, git/agent hooks, CI gates, and the `agenttools_log` lib that the other CLIs consume
 - **[3d-cli](https://github.com/alex-mextner/3d-cli)** — scriptable CLI for the full 3D FDM lifecycle: modeling, mesh repair, slicing, and print monitoring
 - **[hyperide.ai](https://hyperide.ai)** — Figma replacement inside VS Code. Edit React components directly through AST/LSP without AI hallucinations, token waste, or context-window limits. Works for indie vibe-coding and for enterprise teams with split design/dev roles.
 
