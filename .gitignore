@@ -1,3 +1,6 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# rig harness auto-mode is LOCAL (per-machine via rig apply), not committed
+.claude/
