@@ -3,8 +3,9 @@
 # Works both from a local clone (./install.sh) and piped from curl:
 #   curl -fsSL https://raw.githubusercontent.com/alex-mextner/draw-cli/main/install.sh | bash
 #
-# Cleaner alternative if you use pipx:
-#   pipx install git+https://github.com/alex-mextner/draw-cli
+# draw's runtime deps (huggingface_hub + Pillow) are REQUIRED, so this installer is
+# PIPX-FIRST: when pipx is present it gets an isolated venv with the deps + `draw` on
+# PATH. Without pipx it falls back to a symlink + `pip install --user`.
 set -euo pipefail
 
 # ── identity ──────────────────────────────────────────────────────────────────
@@ -44,51 +45,93 @@ else
 fi
 
 # ── bin dir ───────────────────────────────────────────────────────────────────
-BIN="$HOME/.local/bin"
+BIN="${PIPX_BIN_DIR:-$HOME/.local/bin}"
 mkdir -p "$BIN"
 
 if [[ ":$PATH:" != *":$BIN:"* ]]; then
   echo ""
   echo "  NOTE: $BIN is not on your PATH."
   echo "  Add the following line to your ~/.bashrc or ~/.zshrc and restart your shell:"
-  echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+  echo "    export PATH=\"$BIN:\$PATH\""
   echo ""
 fi
 
-# ── dependency: huggingface_hub (required) ────────────────────────────────────
-# Cleaner option: pipx install git+https://github.com/alex-mextner/draw-cli
-# (pipx creates an isolated venv and puts `draw` on PATH automatically)
-# Use the SAME python3 for the import check and the install, and pull every
-# runtime dep (huggingface_hub + Pillow, which draw needs to save images).
-if ! python3 -c 'import huggingface_hub, PIL' 2>/dev/null; then
-  echo "draw: installing runtime deps via: python3 -m pip install --user huggingface_hub Pillow"
-  if ! python3 -m pip install --user huggingface_hub Pillow; then
-    echo ""
-    echo "  ERROR: could not install huggingface_hub / Pillow. draw requires them."
-    echo "  Install manually: python3 -m pip install --user huggingface_hub Pillow"
-    echo "  Or use pipx:      pipx install git+https://github.com/$GITHUB_USER/$REPO"
-    echo ""
+# ── install ───────────────────────────────────────────────────────────────────
+# PIPX-FIRST: an isolated venv carries huggingface_hub + Pillow with zero pollution of
+# the system/user site-packages, and `pipx install --force` makes re-runs idempotent.
+DRAW_BIN=""
+INSTALL_MODE=""
+if command -v pipx >/dev/null 2>&1; then
+  INSTALL_MODE="pipx"
+  echo "draw: installing via pipx (isolated venv with huggingface_hub + Pillow)"
+  pipx install --force "$SRC"
+  # Resolve the entry point pipx just dropped. Prefer the expected $BIN/$TOOL; if pipx
+  # landed it elsewhere, fall back to whatever is now on PATH. If NEITHER resolves to an
+  # executable, fail fast — never continue with an empty or foreign binary below.
+  if [[ -x "$BIN/$TOOL" ]]; then
+    DRAW_BIN="$BIN/$TOOL"
+  else
+    DRAW_BIN="$(command -v "$TOOL" 2>/dev/null || true)"
+  fi
+  if [[ -z "$DRAW_BIN" || ! -x "$DRAW_BIN" ]]; then
+    echo "  ERROR: pipx install succeeded but '$TOOL' is not on PATH (check $BIN / PIPX_BIN_DIR)" >&2
     exit 1
   fi
+  echo "draw: pipx installed $TOOL at $DRAW_BIN"
+else
+  INSTALL_MODE="symlink"
+  echo ""
+  echo "  NOTE: pipx not found — falling back to a symlink + 'pip install --user'."
+  echo "  For a clean ISOLATED install (recommended), install pipx and re-run:"
+  echo "    python3 -m pip install --user pipx && python3 -m pipx ensurepath"
+  echo ""
+  # Runtime deps are REQUIRED: use the SAME python3 for the import check and the install,
+  # and pull every dep (huggingface_hub + Pillow, needed to save images).
+  if ! python3 -c 'import huggingface_hub, PIL' 2>/dev/null; then
+    echo "draw: installing runtime deps via: python3 -m pip install --user huggingface_hub Pillow"
+    if ! python3 -m pip install --user huggingface_hub Pillow; then
+      echo ""
+      echo "  ERROR: could not install huggingface_hub / Pillow. draw requires them."
+      echo "  Install manually: python3 -m pip install --user huggingface_hub Pillow"
+      echo "  Or use pipx:      pipx install git+https://github.com/$GITHUB_USER/$REPO"
+      echo ""
+      exit 1
+    fi
+  fi
+  ENTRY_PATH="$SRC/$ENTRY"
+  chmod +x "$ENTRY_PATH"
+  ln -sfn "$ENTRY_PATH" "$BIN/$TOOL"
+  DRAW_BIN="$BIN/$TOOL"
+  echo "draw: symlinked $BIN/$TOOL -> $ENTRY_PATH"
 fi
 
-# ── symlink entry ─────────────────────────────────────────────────────────────
-ENTRY_PATH="$SRC/$ENTRY"
-chmod +x "$ENTRY_PATH"
-ln -sfn "$ENTRY_PATH" "$BIN/$TOOL"
-echo "draw: symlinked $BIN/$TOOL -> $ENTRY_PATH"
+# ── shadow check ──────────────────────────────────────────────────────────────
+# We installed `draw` at $DRAW_BIN, but a different `draw` EARLIER on PATH silently wins.
+# Just WARN (don't touch it — it may be intentional); the user resolves the PATH order.
+RESOLVED="$(command -v "$TOOL" 2>/dev/null || true)"
+if [[ -n "$RESOLVED" && "$RESOLVED" != "$DRAW_BIN" ]]; then
+  echo ""
+  echo "  WARNING: another '$TOOL' shadows our install on PATH:" >&2
+  echo "      installed: $DRAW_BIN" >&2
+  echo "      resolves to: $RESOLVED" >&2
+  echo "  Ensure the dir holding our install precedes the other on PATH, or remove the other." >&2
+  echo ""
+fi
 
 # ── register skill ────────────────────────────────────────────────────────────
-if ! "$BIN/$TOOL" install-skill; then
+# Invoke OUR install (absolute path), never the bare name — a PATH shadow would otherwise
+# run a different binary.
+if ! "$DRAW_BIN" install-skill; then
   echo "  WARNING: '$TOOL install-skill' failed — $TOOL is installed but agents may not"
   echo "           auto-discover it. Re-run '$TOOL install-skill' manually to fix."
 fi
 
 # ── done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo "  draw is installed."
+echo "  draw is installed (via $INSTALL_MODE)."
 echo "  Usage: draw \"a cute robot\" -o robot.png   — generate image from prompt"
 echo "         draw --model <hf-model-id> ...    — use a specific HF model"
 echo "         draw --help                       — full usage"
 echo "  Auth:  set HF_TOKEN env var or put it in ~/.config/draw-cli/.env"
+echo "  Tip:   pipx is the primary path — 'pipx install git+https://github.com/$GITHUB_USER/$REPO'"
 echo ""

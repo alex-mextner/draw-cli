@@ -2,5 +2,10 @@
 __pycache__/
 *.pyc
 
+# Python build artifacts (pip/pipx/setuptools)
+build/
+dist/
+*.egg-info/
+
 # Personal per-machine Claude Code settings (committed slot is .claude/settings.json)
 .claude/settings.local.json

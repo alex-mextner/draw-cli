@@ -24,20 +24,22 @@ or attach it to a Telegram report via `tg --photo`.
 
 ## Install
 
-**One-liner** (installs deps, links `draw` into PATH, registers the agent skill):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/alex-mextner/draw-cli/main/install.sh | bash
-```
-
-**Alternative — isolated env via pipx:**
+draw needs `huggingface_hub` + `Pillow` at runtime, so the recommended path is **pipx** —
+an isolated venv with the deps and `draw` on your PATH:
 
 ```bash
 pipx install git+https://github.com/alex-mextner/draw-cli
 ```
 
-Either way, finish with token setup (see below), then optionally run the skill registration
-step manually if you skipped the one-liner:
+**One-liner** (pipx-first: uses pipx if present, else symlinks `draw` into PATH and installs
+deps with `pip --user`; either way registers the agent skill):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alex-mextner/draw-cli/main/install.sh | bash
+```
+
+Either way, finish with token setup (see below), then run the skill registration step
+manually if you installed with raw pipx (the one-liner runs it for you):
 
 ```bash
 draw install-skill
