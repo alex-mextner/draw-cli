@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "draw-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Text-to-image from the CLI via Hugging Face."
 requires-python = ">=3.9"
 dependencies = ["huggingface_hub", "Pillow"]

@@ -5,6 +5,7 @@ Usage:
     draw "a cute robot" -o robot.png
     draw "a cute robot" --model black-forest-labs/FLUX.1-schnell -o robot.png
     echo "a cute robot" | draw -o robot.png
+    draw --version
 
 Env:
     HF_TOKEN        Hugging Face access token (required)
@@ -14,10 +15,52 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
 ENV_FILE = os.path.expanduser("~/.config/draw-cli/.env")
+DIST_NAME = "draw-cli"
+
+
+def _version() -> str:
+    """Resolve the version dynamically — pyproject is the single source of truth.
+
+    When draw is pip/pipx-installed as the ``draw-cli`` dist, read it from the
+    package metadata. In a source checkout (the common case: ``bin/draw`` run via
+    a symlink, no installed dist) the metadata lookup raises, so fall back to
+    parsing ``[project] version`` out of the sibling ``pyproject.toml`` with a
+    stdlib regex. No ``tomllib`` — this tool supports Python 3.9 (tomllib is
+    3.11+). The literal is never hardcoded here; bumping pyproject is enough.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version(DIST_NAME)
+    except PackageNotFoundError:
+        pass
+    except Exception:
+        pass
+    return _version_from_pyproject()
+
+
+def _version_from_pyproject() -> str:
+    here = os.path.dirname(os.path.dirname(__file__))
+    pyproject = os.path.join(here, "pyproject.toml")
+    try:
+        with open(pyproject, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return "unknown"
+    # Scope to the [project] table so a `version =` in another table (e.g. a
+    # `[tool.*]` block) can't be mistaken for the project version.
+    section = re.split(r"(?m)^\[", text)
+    for chunk in section:
+        if chunk.startswith("project]"):
+            m = re.search(r"(?m)^\s*version\s*=\s*['\"]([^'\"]+)['\"]", chunk)
+            if m:
+                return m.group(1)
+    return "unknown"
 
 
 def _load_env() -> None:
@@ -225,6 +268,13 @@ def main() -> None:
         sys.exit(install_skill())
     _load_env()
     ap = argparse.ArgumentParser(description="Generate an image from a text prompt")
+    ap.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"draw {_version()}",
+        help="show program version and exit",
+    )
     ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
     ap.add_argument("-o", "--out", required=True, help="output image path")
     ap.add_argument("--model", default=_default_model(), help="HF model id")

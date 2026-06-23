@@ -11,6 +11,9 @@ ci:
   target: .github/workflows
   all: false
   items:
+    tests:
+      enabled: true
+      tier: block
     secret-scan:
       enabled: true
       tier: block
