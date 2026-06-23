@@ -45,7 +45,12 @@ def _version() -> str:
 
 
 def _version_from_pyproject() -> str:
-    here = os.path.dirname(os.path.dirname(__file__))
+    # realpath() resolves the symlink first: draw is installed on PATH as a symlink
+    # to bin/draw in the checked-out repo, so under that invocation a raw __file__
+    # points at the symlink's dir (no pyproject there) and the lookup would yield
+    # "unknown". Resolving to the real file lands us back at the repo root.
+    real = os.path.realpath(__file__)
+    here = os.path.dirname(os.path.dirname(real))
     pyproject = os.path.join(here, "pyproject.toml")
     try:
         with open(pyproject, encoding="utf-8") as f:
