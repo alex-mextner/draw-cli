@@ -2,5 +2,11 @@
 __pycache__/
 *.pyc
 
+# Build / test artifacts (e.g. from `uv run` building the dist locally)
+*.egg-info/
+.venv/
+uv.lock
+.pytest_cache/
+
 # Personal per-machine Claude Code settings (committed slot is .claude/settings.json)
 .claude/settings.local.json
