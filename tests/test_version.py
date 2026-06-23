@@ -12,9 +12,11 @@ Run: `python3 -m pytest tests/` (or plain `python3 tests/test_version.py`).
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -76,6 +78,25 @@ def test_pyproject_fallback_resolver_matches_declared_version() -> None:
     assert resolver() == _pyproject_version()
 
 
+def test_version_via_symlink_resolves_real_repo() -> None:
+    # Regression: draw is installed on PATH as a SYMLINK to bin/draw in the checked-out
+    # repo. Invoked that way, a naive __file__ points at the symlink's dir (no pyproject
+    # there) and --version printed "unknown". Resolving the symlink (os.path.realpath)
+    # must land back at the repo root. The other tests run bin/draw by its real path and
+    # would not catch this — so exercise the symlinked invocation explicitly.
+    with tempfile.TemporaryDirectory() as tmp:
+        link = os.path.join(tmp, "draw")
+        os.symlink(str(DRAW), link)
+        result = subprocess.run(
+            [sys.executable, link, "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"draw {_pyproject_version()}"
+
+
 def test_version_does_not_match_stale_default() -> None:
     # Drift guard: the version must MOVE off the original 0.1.0 sentinel once a
     # feature ships (the ship.sh bump gate enforces the same on release). If this
@@ -87,5 +108,6 @@ if __name__ == "__main__":
     test_version_flag_prints_pyproject_version()
     test_short_version_flag_is_correct_not_just_equal()
     test_pyproject_fallback_resolver_matches_declared_version()
+    test_version_via_symlink_resolves_real_repo()
     test_version_does_not_match_stale_default()
     print("ok: all version tests passed")
