@@ -127,6 +127,23 @@ if ! "$DRAW_BIN" install-skill; then
 fi
 
 # ── done ──────────────────────────────────────────────────────────────────────
+# Gate the success report on PATH resolution: pipx/symlink drops $DRAW_BIN, but if $BIN is
+# not on PATH then `draw` by NAME does not work. Don't report a clean "installed" in that
+# case — warn loudly so the user fixes PATH instead of believing the bare command works.
+# (The shadow check above only fires when a DIFFERENT `draw` resolves; an unreachable $BIN
+# leaves RESOLVED empty, so it stays silent — this closes that gap.)
+PATH_RESOLVED="$(command -v "$TOOL" 2>/dev/null || true)"
+if [[ -z "$PATH_RESOLVED" ]]; then
+  echo "" >&2
+  echo "  WARNING: $TOOL is installed at $DRAW_BIN, but does NOT resolve by name on PATH." >&2
+  echo "           ($BIN is not on your PATH, so the bare '$TOOL' command will not work yet.)" >&2
+  echo "  Fix it:  add $BIN to PATH, then restart your shell:" >&2
+  echo "             export PATH=\"$BIN:\$PATH\"" >&2
+  echo "  Until then, run $TOOL by full path: $DRAW_BIN" >&2
+  echo "" >&2
+  exit 1
+fi
+
 echo ""
 echo "  draw is installed (via $INSTALL_MODE)."
 echo "  Usage: draw \"a cute robot\" -o robot.png   — generate image from prompt"
