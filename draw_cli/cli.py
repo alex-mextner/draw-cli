@@ -4,6 +4,7 @@ Usage:
     draw "a cute robot" -o robot.png
     draw "a cute robot" --model black-forest-labs/FLUX.1-schnell -o robot.png
     echo "a cute robot" | draw -o robot.png
+    draw --version
 
 Env:
     HF_TOKEN        Hugging Face access token (required)
@@ -14,6 +15,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+
+from draw_cli import __version__
 
 DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
 ENV_FILE = os.path.expanduser("~/.config/draw-cli/.env")
@@ -232,6 +235,16 @@ def main() -> int:
         return install_skill()
     _load_env()
     ap = argparse.ArgumentParser(description="Generate an image from a text prompt")
+    # action="version" short-circuits before required-arg validation, so
+    # `draw --version` works without -o. __version__ is the single source of truth
+    # (kept in sync with pyproject's [project] version).
+    ap.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"draw {__version__}",
+        help="show program version and exit",
+    )
     ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
     ap.add_argument("-o", "--out", required=True, help="output image path")
     ap.add_argument("--model", default=_default_model(), help="HF model id")

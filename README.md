@@ -71,6 +71,9 @@ draw "a cute robot" --model black-forest-labs/FLUX.1-dev -o robot.png
 
 # Prompt from stdin
 echo "a cute robot" | draw -o robot.png
+
+# Print version and exit (no -o needed)
+draw --version
 ```
 
 ## Flags
@@ -80,6 +83,7 @@ echo "a cute robot" | draw -o robot.png
 | `prompt` (positional) | — | Text prompt. Reads from stdin if omitted. |
 | `-o / --out` | required | Output image path (e.g. `out.png`). |
 | `--model <hf-id>` | `black-forest-labs/FLUX.1-schnell` | Any HF text-to-image model ID. |
+| `-V / --version` | — | Print the version (`draw <ver>`) and exit. Works without `-o`. |
 
 ## Env vars
 
