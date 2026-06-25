@@ -224,7 +224,9 @@ def generate(prompt: str, model: str, out_path: str) -> None:
 
     try:
         image.save(out_path)
-    except OSError as e:
+    except (OSError, ValueError) as e:
+        # PIL raises ValueError when the output path has no/unknown extension
+        # (can't infer the format), OSError for filesystem/encode failures.
         sys.stderr.write(f"draw: cannot save {out_path}: {e}\n")
         sys.exit(1)
     print(f"draw: saved {out_path}")
