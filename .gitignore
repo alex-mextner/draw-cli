@@ -2,7 +2,9 @@
 __pycache__/
 *.pyc
 
-# Build / test artifacts (e.g. from `uv run` building the dist locally)
+# Python build / test artifacts (pip/pipx/setuptools, uv, pytest)
+build/
+dist/
 *.egg-info/
 .venv/
 uv.lock
