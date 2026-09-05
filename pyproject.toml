@@ -8,12 +8,13 @@ name = "draw-cli"
 # here at build time (see [tool.setuptools.dynamic] below), so it can never drift
 # between the package and the dist metadata.
 dynamic = ["version"]
-description = "Text-to-image from the CLI via Hugging Face, Stability AI or local SD 3.5."
+description = "Text-to-image from the CLI via APIs, local Diffusers or native Metal/GGUF."
 requires-python = ">=3.9"
 dependencies = ["huggingface_hub>=0.34,<2", "Pillow"]
 
-# Heavy ML packages are opt-in; API-only installs never install PyTorch.
+# Heavy ML packages are opt-in; API-only and sdcpp installs never install PyTorch.
 [project.optional-dependencies]
+sdcpp = ["psutil>=5.9"]
 local = [
     "torch>=2.4",
     "diffusers>=0.35,<1",

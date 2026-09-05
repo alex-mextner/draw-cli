@@ -1,8 +1,3 @@
-"""draw — generate an image from a text prompt via Hugging Face Inference API.
+"""draw — text-to-image via APIs, Diffusers or native Metal/GGUF."""
 
-The CLI logic lives in draw_cli.cli; the console entry point is draw_cli.cli:main
-(see pyproject.toml [project.scripts]). bin/draw is a thin shim for the legacy
-install.sh symlink path.
-"""
-
-__version__ = "0.3.0"
+__version__ = "0.4.0"
