@@ -8,9 +8,22 @@ name = "draw-cli"
 # here at build time (see [tool.setuptools.dynamic] below), so it can never drift
 # between the package and the dist metadata.
 dynamic = ["version"]
-description = "Text-to-image from the CLI via Hugging Face."
+description = "Text-to-image from the CLI via Hugging Face, Stability AI or local SD 3.5."
 requires-python = ">=3.9"
-dependencies = ["huggingface_hub>=0.20", "Pillow"]
+dependencies = ["huggingface_hub>=0.34,<2", "Pillow"]
+
+# Heavy ML packages are opt-in; API-only installs never install PyTorch.
+[project.optional-dependencies]
+local = [
+    "torch>=2.4",
+    "diffusers>=0.35,<1",
+    "transformers>=4.44,<5",
+    "accelerate>=0.33",
+    "safetensors>=0.4.5",
+    "sentencepiece>=0.2",
+    "protobuf>=3.20",
+    "psutil>=5.9",
+]
 
 # The CLI is a real package (`draw_cli`), exposed via a proper console entry point
 # instead of the deprecated distutils `script-files` shebang-rewrite (which pipx never

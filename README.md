@@ -1,7 +1,8 @@
 # draw-cli
 
-Generate images from text prompts via the Hugging Face Inference API — designed to be called
-from any shell, script, or AI coding agent without leaving the terminal.
+Generate images from text prompts via Hugging Face Inference Providers, the Stability AI API,
+or local Stable Diffusion 3.5 Large — designed to be called from any shell, script, or AI coding
+agent without leaving the terminal.
 
 ## Why agents use this
 
@@ -24,8 +25,8 @@ or attach it to a Telegram report via `tg --photo`.
 
 ## Install
 
-draw needs `huggingface_hub` + `Pillow` at runtime, so the recommended path is **pipx** —
-an isolated venv with the deps and `draw` on your PATH:
+draw needs `huggingface_hub>=0.34,<2` + `Pillow` at runtime, so the recommended path is **pipx** —
+an isolated venv with the deps and `draw` on your PATH. API use does not install PyTorch:
 
 ```bash
 pipx install git+https://github.com/alex-mextner/draw-cli
@@ -36,6 +37,12 @@ deps with `pip --user`; either way registers the agent skill):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alex-mextner/draw-cli/main/install.sh | bash
+```
+
+For an existing legacy symlink install, upgrade its runtime dependencies too:
+
+```bash
+python3 -m pip install --user --upgrade 'huggingface_hub>=0.34,<2' Pillow
 ```
 
 Either way, finish with token setup (see below), then run the skill registration step
@@ -55,19 +62,30 @@ Create `~/.config/draw-cli/.env`:
 
 ```
 HF_TOKEN=hf_...
+# Optional: required only for --backend stability
+# STABILITY_API_KEY=your_key
 ```
 
 Get a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-(a free-tier read token is enough for inference).
+with Inference Providers permission for hosted inference. Local gated downloads need access
+to the model repository after accepting its conditions. `hf auth login` is also supported.
+Hosted availability, quotas and charges depend on the provider/account; a token does not
+make every model available or free.
 
 ## Usage
 
 ```bash
-# Prompt as positional arg
+# Prompt as positional arg; HF/FLUX remains the default
 draw "a cute robot" -o robot.png
 
 # Override model
 draw "a cute robot" --model black-forest-labs/FLUX.1-dev -o robot.png
+
+# Stable Diffusion 3.5 Large through Hugging Face
+draw "a cute robot" --model sd3.5 -o robot.png
+
+# Stable Diffusion 3.5 Large through Stability AI directly
+draw "a cute robot" --backend stability --aspect-ratio 16:9 -o robot.png
 
 # Prompt from stdin
 echo "a cute robot" | draw -o robot.png
@@ -76,56 +94,89 @@ echo "a cute robot" | draw -o robot.png
 draw --version
 ```
 
+### Local Stable Diffusion 3.5 Large
+
+Install the optional local dependencies, accept the model's Hugging Face access conditions,
+and check resources before downloading weights:
+
+```bash
+# In a checkout/virtual environment:
+python -m pip install ".[local]"
+
+draw --check-resources
+draw --check-resources --cache-dir /mnt/models/huggingface --json
+draw "a cute robot" --backend local --seed 42 -o robot.png
+```
+
+Local generation always checks cache/output disk space, available RAM, cgroup limits and
+free GPU memory before loading. It supports CUDA, Apple MPS and explicitly requested CPU,
+automatic dtype/CPU offload, pinned model revisions and offline cached execution.
+It never switches to a paid API when resources are insufficient. RAM/VRAM thresholds are
+conservative estimates, not guarantees against OOM.
+
+See [the SD 3.5 guide](docs/stable-diffusion-3.5.md) for pipx extras, hardware estimates,
+cache accounting, offline operation and backend-specific options.
+
 ## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `prompt` (positional) | — | Text prompt. Reads from stdin if omitted. |
-| `-o / --out` | required | Output image path (e.g. `out.png`). |
-| `--model <hf-id>` | `black-forest-labs/FLUX.1-schnell` | Any HF text-to-image model ID. |
-| `-V / --version` | — | Print the version (`draw <ver>`) and exit. Works without `-o`. |
+| `-o / --out` | required for generation | Output image path; parent directory must exist. |
+| `--backend` | `hf` | `hf`/`api`, `stability`, or `local`. |
+| `--model` | FLUX for HF; SD 3.5 Large otherwise | HF model ID or `sd3.5` alias. |
+| `--provider` | `auto` | Hugging Face Inference Provider. HF only. |
+| `--negative-prompt`, `--seed` | backend default | Negative prompt; seed from 0 through 4294967295. |
+| `--width`, `--height` | local: 1024 | HF/local dimensions; local must be multiples of 16. |
+| `--steps`, `--guidance-scale` | local: 28 / 3.5 | HF/local generation controls. |
+| `--aspect-ratio` | `1:1` | Direct Stability API only. |
+| `--timeout` | 300 seconds | API timeout. |
+| `--device` | `auto` | Local: `cuda`, `cuda:N`, `mps`, `cpu`, `auto`. |
+| `--dtype` | `auto` | Local: `float16`, `bfloat16`, `float32`, `auto`. |
+| `--offload` | `auto` | Local: `none`, `model`, `sequential`, `auto`. |
+| `--cache-dir`, `--revision` | HF cache / `main` | Local cache location and model revision. |
+| `--offline` | off | Local: use a snapshot previously downloaded through draw. |
+| `--check-resources` | — | Local diagnostics without weights download; no prompt/output required. |
+| `--json` | off | Machine-readable resource report; exit 0 = pass, 1 = blocked. |
+| `-V / --version` | — | Print the version and exit. Works without `-o`. |
+
+Unsupported combinations fail explicitly rather than ignoring flags. Use `draw --help` for
+argument details. Plain `--check-resources` selects local unless `--backend` or `DRAW_BACKEND`
+explicitly selects another backend.
 
 ## Env vars
 
 | Variable | Description |
 |----------|-------------|
-| `HF_TOKEN` | Hugging Face access token. Auto-loaded from `~/.config/draw-cli/.env`. |
-| `HF_MODEL` | Default model override (same effect as `--model`). |
+| `HF_TOKEN` | Hugging Face access token; alternatively use a cached login. |
+| `STABILITY_API_KEY` | Direct Stability AI API key; not an HF token. |
+| `HF_MODEL` | Default HF backend model override. |
+| `DRAW_BACKEND` | Default backend override; an explicit flag wins. |
+| `HF_HOME`, `HF_HUB_CACHE` | Hugging Face cache roots, honored by local mode. |
+| `HF_HUB_OFFLINE` | Set to `1` for local offline mode. |
+
+Variables are auto-loaded from `~/.config/draw-cli/.env` without replacing existing environment values.
 
 ## Requirements
 
-- Python 3.9+
-- [`huggingface_hub`](https://pypi.org/project/huggingface_hub/) and `Pillow` Python packages
+- Python 3.9+ for the base CLI; Python 3.10+ recommended for the optional local stack.
+- [`huggingface_hub`](https://pypi.org/project/huggingface_hub/) (>=0.34,<2) and `Pillow`.
+- Optional `[local]` dependencies and sufficient resources for local SD 3.5 Large.
 
 ---
 
 ## How draw compares
 
 The other text-to-image CLIs trade off between *simple-but-locked-in* and
-*powerful-but-heavy*. Single-vendor tools (dallecli, openai-cli-art) are one `pip install`
-but hard-wired to OpenAI and a paid key. Model runners (Replicate CLI, simonw `llm`) are
-flexible but route through a paid hosted API or a general LLM harness. Local engines
-(comfy-cli / ComfyUI) are the most capable but pull in a full generative stack and a server.
+*powerful-but-heavy*. Single-vendor tools (dallecli, openai-cli-art) are hard-wired
+to one provider. General runners (Replicate CLI, simonw `llm`) cover broader AI
+workflows. Local engines such as ComfyUI provide substantially more workflow control.
 
-`draw` is the minimal middle: **one command**, **any Hugging Face text-to-image model** via
-`--model` (FLUX by default), runnable on a **free-tier HF token**, **stdin-pipeable** for
-agent-assembled prompts, and it **registers an agent skill** so harnesses discover it. It
-deliberately does *one* thing — prompt in, image file out — and leaves editing/filtering to
-real image tools.
-
-| Tool | Model-agnostic | Free-tier path | Stdin pipe | No local server | Agent-skill registration | Single-purpose simplicity |
-|---|---|---|---|---|---|---|
-| **draw** | ✓ (any HF model) | ✓ (HF free token) | ✓ | ✓ | ✓ | ✓ |
-| dallecli | — (OpenAI only) | — (paid key) | — | ✓ | — | ~ (also edit/filter) |
-| openai-cli-art | — (OpenAI only) | — (paid key) | ~ | ✓ | — | ~ |
-| Replicate CLI | ✓ (any hosted model) | ~ (free credits) | ✓ | ✓ | — | — (generic runner) |
-| simonw `llm` (+ image plugins) | ✓ (via plugins) | ~ (depends on backend) | ✓ | ~ | — | — (general LLM CLI) |
-| comfy-cli / ComfyUI | ✓ (local + partner) | ✓ (local) | — | — (runs a server) | — | — (full stack) |
-
-`~` = partial. `draw` is not the most powerful — comfy-cli wins on local control and `llm`
-on breadth — but it is the lightest path from a shell prompt to an image file with no vendor
-lock-in and no server to babysit, which is exactly what a coding agent needs for placeholder
-and concept art.
+`draw` keeps **one command**, **stdin-pipeable prompts**, **plain image output**,
+**no local server**, and **agent-skill registration**. Its base API installation
+stays lightweight; SD 3.5 local inference is an explicit optional extra, not a
+large download imposed on every user. It deliberately does one thing — prompt
+in, image file out — and leaves editing/filtering to image tools.
 
 ## Ecosystem
 

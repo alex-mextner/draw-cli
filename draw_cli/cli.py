@@ -1,13 +1,17 @@
-"""draw — generate an image from a text prompt via Hugging Face Inference API.
+"""draw — text-to-image via Hugging Face, Stability API, or local SD 3.5.
 
 Usage:
     draw "a cute robot" -o robot.png
     draw "a cute robot" --model black-forest-labs/FLUX.1-schnell -o robot.png
     echo "a cute robot" | draw -o robot.png
+    draw "a cute robot" --backend local --model sd3.5 -o robot.png
+    draw --check-resources
     draw --version
 
 Env:
-    HF_TOKEN        Hugging Face access token (required)
+    HF_TOKEN        Hugging Face token (API, or gated model downloads)
+    STABILITY_API_KEY  Stability AI API key
+    DRAW_BACKEND    Default backend: hf, stability, local (default: hf)
     HF_MODEL        Default model (default: black-forest-labs/FLUX.1-schnell)
 """
 from __future__ import annotations
@@ -60,7 +64,8 @@ SKILL_MD = """\
 ---
 name: draw
 description: >-
-  Generate images from a text prompt via Hugging Face (FLUX by default). Use when
+  Generate images via Hugging Face (FLUX by default), Stability API, or local
+  Stable Diffusion 3.5 Large with resource checks. Use when
   a task needs an image created from a description — placeholder or hero art, icons,
   concept sketches, mock assets, a diagram rendered as an image — produced from the
   shell without leaving the session, e.g. `draw "a cute robot" -o robot.png`.
@@ -71,196 +76,203 @@ metadata:
 
 # draw — text-to-image from the CLI
 
-Generate an image from any agent or shell via Hugging Face.
+Generate an image from any agent or shell via an API or local SD 3.5 Large.
 
 ## Invocation
 ```
 draw "a cute robot" -o robot.png        # prompt + output path (required)
 draw "..." --model <hf-id> -o out.png   # pick a Hugging Face model
 echo "a prompt" | draw -o out.png       # prompt from stdin
+draw "..." --model sd3.5 --provider replicate -o out.png  # HF API
+draw "..." --backend stability -o out.png                # Stability API
+draw --check-resources --json                            # no weight download
+draw "..." --backend local --offload auto -o out.png      # local SD 3.5
 ```
 
 ## When to use
 - The task needs a generated image/asset (placeholder, hero, icon, concept art).
 - You want to produce art inline without leaving the shell session.
 
-Needs `HF_TOKEN` (auto-loaded from `~/.config/draw-cli/.env`). Pair with
+API credentials: `HF_TOKEN` for Hugging Face, `STABILITY_API_KEY` for Stability.
+Both are auto-loaded from `~/.config/draw-cli/.env`. API use can incur charges.
+Local mode needs the optional `[local]` dependencies, accepted Hugging Face model
+access and enough available disk/RAM/VRAM. Run `draw --check-resources` first;
+use `--cache-dir` to select a disk. `--offline` uses a cache downloaded by draw.
+CPU inference requires explicit `--device cpu`. Never switch backends, download
+large weights, or make paid API calls without the user requesting that mode.
+Pair with
 `tg --photo out.png "caption"` to send the result to Telegram.
 """
 SKILL_BLURB = (
-    '`draw` — generate an image from text via Hugging Face: '
+    '`draw` — generate an image via Hugging Face, Stability API or local SD 3.5: '
     '`draw "prompt" -o out.png`. Use when a task needs a generated image/asset.'
 )
 
-_HOOK_MARKER = "# agent-tools-awareness"
-_HOOK_COMMAND = (
-    "sh -c 'd=\"$HOME/.agents/skills/.blurbs\"; ls \"$d\"/*.md >/dev/null 2>&1 && "
-    '{ printf \"Agent CLI tools installed on this machine (prefer them):\\n\"; '
-    "cat \"$d\"/*.md; }' " + _HOOK_MARKER
-)
-
-
-def _detected(cmd: str, *dirs: str) -> bool:
-    import shutil
-    if shutil.which(cmd):
-        return True
-    return any(os.path.isdir(os.path.expanduser(d)) for d in dirs)
-
-
-def _append_marked(path, tool: str, blurb: str) -> None:
-    import re
-    from pathlib import Path
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    start, end = f"<!-- skill:{tool} -->", f"<!-- /skill:{tool} -->"
-    existing = p.read_text(encoding="utf-8") if p.exists() else ""
-    existing = re.sub(re.escape(start) + r".*?" + re.escape(end) + r"\n?", "", existing, flags=re.S)
-    block = f"{start}\n{blurb}\n{end}\n"
-    p.write_text((existing.rstrip() + "\n\n" + block) if existing.strip() else block, encoding="utf-8")
-
-
-def _ensure_sessionstart_hook(home) -> bool:
-    """Idempotently add a SessionStart hook to ~/.claude/settings.json that
-    surfaces installed agent CLIs. Returns True if settings were changed.
-    Conservative: never removes or rewrites unrelated config; backs up first."""
-    import json
-    from pathlib import Path
-    settings = Path(home) / ".claude" / "settings.json"
-    if not settings.parent.is_dir():
-        return False
-    try:
-        data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
-    except (json.JSONDecodeError, OSError):
-        return False  # don't clobber a file we can't parse
-    if not isinstance(data, dict):
-        return False
-    hooks = data.setdefault("hooks", {})
-    if not isinstance(hooks, dict):
-        return False
-    sessionstart = hooks.setdefault("SessionStart", [])
-    if not isinstance(sessionstart, list):
-        return False
-    # Already installed? (match our marker anywhere in existing commands)
-    for group in sessionstart:
-        for h in (group or {}).get("hooks", []) if isinstance(group, dict) else []:
-            if isinstance(h, dict) and _HOOK_MARKER in str(h.get("command", "")):
-                return False
-    sessionstart.append({"hooks": [{"type": "command", "command": _HOOK_COMMAND}]})
-    if settings.exists():
-        settings.with_suffix(".json.bak").write_text(settings.read_text(encoding="utf-8"), encoding="utf-8")
-    settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return True
-
-
-def install_agent_skill(name: str, skill_md: str, blurb: str) -> int:
-    from pathlib import Path
-    home = Path.home()
-    written = []
-
-    # Layer 1 — SKILL.md (Agent Skills standard) + blurb file for the hook.
-    skill_dir = home / ".agents" / "skills" / name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
-    written.append(str(skill_dir / "SKILL.md"))
-    blurbs = home / ".agents" / "skills" / ".blurbs"
-    blurbs.mkdir(parents=True, exist_ok=True)
-    (blurbs / f"{name}.md").write_text(f"- {blurb}\n", encoding="utf-8")
-
-    # Claude Code also scans ~/.claude/skills — symlink for compatibility.
-    claude_skills = home / ".claude" / "skills"
-    if claude_skills.is_dir():
-        link = claude_skills / name
-        if not link.exists():
-            try:
-                link.symlink_to(Path("..") / ".." / ".agents" / "skills" / name)
-            except OSError:
-                pass
-
-    # Layer 2 — always-on blurb in each DETECTED harness's instruction file.
-    harness_files = [
-        ("claude", home / ".claude" / "CLAUDE.md", ("~/.claude",)),
-        ("codex", home / ".codex" / "AGENTS.md", ("~/.codex",)),
-        ("opencode", home / ".config" / "opencode" / "AGENTS.md", ("~/.config/opencode",)),
-        ("gemini", home / ".gemini" / "GEMINI.md", ("~/.gemini",)),
-    ]
-    for cmd, path, dirs in harness_files:
-        if _detected(cmd, *dirs):
-            _append_marked(path, name, blurb)
-            written.append(str(path))
-
-    # Layer 3 — SessionStart hook (Claude Code) aggregating all installed tools.
-    if (home / ".claude").is_dir():
-        if _ensure_sessionstart_hook(home):
-            written.append("SessionStart hook -> ~/.claude/settings.json")
-
-    for w in written:
-        print(f"  ✓ {w}")
-    print(f"{name}: install-skill done ({len(written)} target(s)). Re-run anytime; idempotent.")
-    return 0
+# Keep the pre-existing agent-harness installation behavior isolated and unchanged.
+from draw_cli.legacy import install_agent_skill
 
 
 def install_skill() -> int:
     return install_agent_skill(SKILL_NAME, SKILL_MD, SKILL_BLURB)
 
 
-def generate(prompt: str, model: str, out_path: str) -> None:
-    try:
-        from huggingface_hub import InferenceClient
-    except ImportError:
-        sys.stderr.write(
-            "draw: missing deps. Install via pipx (isolated): "
-            "pipx install --force git+https://github.com/alex-mextner/draw-cli\n"
-            "  — or: python3 -m pip install --user huggingface_hub Pillow\n"
-        )
-        sys.exit(1)
+def generate(prompt: str, model: str, out_path: str, *, backend: str = "hf", **options) -> None:
+    from draw_cli.backends import (DrawError, SD35_MODEL, generate_hf, generate_stability,
+                                   normalize_model, save_image, validate_output)
 
-    token = _token()
-    client = InferenceClient(token=token)
-    try:
-        image = client.text_to_image(prompt, model=model)
-    except Exception as e:
-        sys.stderr.write(f"draw: generation failed: {e}\n")
-        sys.exit(1)
-
-    try:
-        image.save(out_path)
-    except (OSError, ValueError) as e:
-        # PIL raises ValueError when the output path has no/unknown extension
-        # (can't infer the format), OSError for filesystem/encode failures.
-        sys.stderr.write(f"draw: cannot save {out_path}: {e}\n")
-        sys.exit(1)
+    model = normalize_model(model)
+    settings = options.get("settings")
+    width = settings.width if settings is not None else options.get("width") or 1024
+    height = settings.height if settings is not None else options.get("height") or 1024
+    # Fail before a paid request or model download for invalid/unwritable destinations.
+    output = validate_output(out_path, width, height)
+    if backend == "local":
+        from draw_cli.local import generate_local
+        if model != SD35_MODEL:
+            raise DrawError("local mode currently supports only --model sd3.5 (SD 3.5 Large)")
+        image = generate_local(prompt, **options)
+    elif backend == "stability":
+        image = generate_stability(prompt, model, **options)
+    elif backend == "hf":
+        image = generate_hf(prompt, model, **options)
+    else:
+        raise DrawError(f"unsupported backend: {backend}")
+    save_image(image, str(output))
     print(f"draw: saved {out_path}")
 
 
+def _int_range(low: int, high: int):
+    def parse(value: str) -> int:
+        try:
+            number = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError("expected an integer") from None
+        if not low <= number <= high:
+            raise argparse.ArgumentTypeError(f"must be between {low} and {high}")
+        return number
+    return parse
+
+
+def _finite_float(value: str) -> float:
+    import math
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a number") from None
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError("must be a finite, non-negative number")
+    return number
+
+
 def main() -> int:
-    if sys.argv[1:] == ["install-skill"]:  # exact-match: `draw "install-skill" -o x` still draws
+    if sys.argv[1:] == ["install-skill"]:
         return install_skill()
     _load_env()
-    ap = argparse.ArgumentParser(description="Generate an image from a text prompt")
-    # action="version" short-circuits before required-arg validation, so
-    # `draw --version` works without -o. __version__ is the single source of truth
-    # (kept in sync with pyproject's [project] version).
-    ap.add_argument(
-        "-V",
-        "--version",
-        action="version",
-        version=f"draw {__version__}",
-        help="show program version and exit",
-    )
+    from draw_cli.backends import ASPECT_RATIOS, SD35_MODEL, normalize_model, safe_error
+
+    ap = argparse.ArgumentParser(description="Generate an image via an API or local Stable Diffusion 3.5")
+    ap.add_argument("-V", "--version", action="version", version=f"draw {__version__}")
     ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
-    ap.add_argument("-o", "--out", required=True, help="output image path")
-    ap.add_argument("--model", default=_default_model(), help="HF model id")
+    ap.add_argument("-o", "--out", help="output image path (required except for resource checks)")
+    ap.add_argument("--backend", choices=("hf", "api", "stability", "local"),
+                    help="hf/api: Hugging Face; stability: Stability AI; local: Diffusers")
+    ap.add_argument("--model", help="HF model ID or sd3.5 alias; local/stability default to SD 3.5 Large")
+    ap.add_argument("--provider", help="Hugging Face Inference Provider (default: auto)")
+    ap.add_argument("--negative-prompt")
+    ap.add_argument("--seed", type=_int_range(0, 2**32 - 1))
+    ap.add_argument("--width", type=_int_range(256, 2048))
+    ap.add_argument("--height", type=_int_range(256, 2048))
+    ap.add_argument("--steps", type=_int_range(1, 100), help="HF/local steps (local default: 28)")
+    ap.add_argument("--guidance-scale", type=_finite_float, help="HF/local guidance (local default: 3.5)")
+    ap.add_argument("--aspect-ratio", choices=ASPECT_RATIOS, help="Stability API only (default: 1:1)")
+    ap.add_argument("--timeout", type=_finite_float, help="API timeout in seconds (default: 300)")
+    ap.add_argument("--device", help="local: auto, cuda, cuda:N, mps or cpu")
+    ap.add_argument("--dtype", choices=("auto", "float16", "bfloat16", "float32"))
+    ap.add_argument("--offload", choices=("auto", "none", "model", "sequential"))
+    ap.add_argument("--cache-dir", help="local model cache directory; otherwise use HF_HUB_CACHE")
+    ap.add_argument("--revision", help="local model revision to pin (default: main)")
+    ap.add_argument("--offline", action="store_true", help="local: use only a previously downloaded draw cache")
+    ap.add_argument("--check-resources", action="store_true", help="local preflight only, no weights or generation")
+    ap.add_argument("--json", action="store_true", help="machine-readable --check-resources report")
     args = ap.parse_args()
 
-    prompt = args.prompt
-    if not prompt:
-        if not sys.stdin.isatty():
-            prompt = sys.stdin.read().strip()
-        if not prompt:
-            ap.error("prompt is required (arg or stdin)")
+    backend = args.backend or os.environ.get("DRAW_BACKEND") or ("local" if args.check_resources else "hf")
+    backend = "hf" if backend == "api" else backend
+    if backend not in ("hf", "stability", "local"):
+        ap.error("DRAW_BACKEND must be hf, api, stability or local")
+    if args.check_resources and backend != "local":
+        ap.error("--check-resources requires --backend local")
+    if args.json and not args.check_resources:
+        ap.error("--json requires --check-resources")
+    local_flags = (args.device, args.dtype, args.offload, args.cache_dir, args.revision, args.offline)
+    if backend != "local" and any(local_flags):
+        ap.error("--device/--dtype/--offload/--cache-dir/--revision/--offline require --backend local")
+    if backend != "hf" and args.provider is not None:
+        ap.error("--provider applies only to --backend hf")
+    if backend != "stability" and args.aspect_ratio is not None:
+        ap.error("--aspect-ratio applies only to --backend stability; use --width and --height otherwise")
+    if backend == "stability" and any(v is not None for v in (
+            args.width, args.height, args.steps, args.guidance_scale)):
+        ap.error("Stability API mode does not expose --width/--height/--steps/--guidance-scale; "
+                 "use --aspect-ratio, or choose hf/local")
+    if args.timeout is not None and (backend == "local" or args.timeout <= 0):
+        ap.error("--timeout must be positive and applies only to API backends")
+    model = normalize_model(args.model or (_default_model() if backend == "hf" else SD35_MODEL))
+    if backend != "hf" and model != SD35_MODEL:
+        ap.error("local/stability mode currently supports only --model sd3.5 (SD 3.5 Large)")
 
-    generate(prompt, args.model, args.out)
-    return 0
+    settings = None
+    if backend == "local":
+        import re
+        from draw_cli.local import LocalSettings
+        device = args.device or "auto"
+        if device not in ("auto", "cpu", "mps", "cuda") and not re.fullmatch(r"cuda:\d+", device):
+            ap.error("--device must be auto, cpu, mps, cuda or cuda:N")
+        width, height = args.width or 1024, args.height or 1024
+        if width % 16 or height % 16:
+            ap.error("local --width and --height must be divisible by 16")
+        offline = args.offline or os.environ.get("HF_HUB_OFFLINE", "").upper() in ("1", "ON", "YES", "TRUE")
+        settings = LocalSettings(device=device, dtype=args.dtype or "auto", offload=args.offload or "auto",
+                                 cache_dir=args.cache_dir, revision=args.revision or "main", offline=offline,
+                                 width=width, height=height)
+    try:
+        if args.check_resources:
+            import json
+            from draw_cli.local import format_report, preflight
+            report, _ = preflight(settings)
+            if args.out:
+                from draw_cli.backends import validate_output
+                try:
+                    validate_output(args.out, settings.width, settings.height)
+                except Exception as exc:
+                    report["errors"].append(safe_error(exc))
+                    report["ok"] = False
+            print(json.dumps(report, indent=2) if args.json else format_report(report))
+            return 0 if report["ok"] else 1
+        if not args.out:
+            ap.error("-o/--out is required for generation")
+        prompt = args.prompt
+        if not prompt and not sys.stdin.isatty():
+            prompt = sys.stdin.read().strip()
+        if not prompt or not prompt.strip():
+            ap.error("prompt is required (arg or stdin)")
+        common = dict(seed=args.seed, negative_prompt=args.negative_prompt)
+        if backend == "local":
+            common.update(settings=settings, steps=args.steps if args.steps is not None else 28,
+                          guidance_scale=args.guidance_scale if args.guidance_scale is not None else 3.5)
+        elif backend == "stability":
+            common.update(aspect_ratio=args.aspect_ratio or "1:1", timeout=args.timeout or 300)
+        else:
+            common.update(provider=args.provider or "auto", timeout=args.timeout or 300,
+                          width=args.width, height=args.height, steps=args.steps, guidance_scale=args.guidance_scale)
+        generate(prompt, model, args.out, backend=backend, **common)
+        return 0
+    except KeyboardInterrupt:
+        sys.stderr.write("draw: cancelled\n")
+        return 130
+    except Exception as exc:
+        sys.stderr.write(f"draw: {safe_error(exc)}\n")
+        return 1
 
 
 if __name__ == "__main__":
