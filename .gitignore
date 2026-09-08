@@ -12,3 +12,6 @@ uv.lock
 
 # Personal per-machine Claude Code settings (committed slot is .claude/settings.json)
 .claude/settings.local.json
+
+# Serena MCP project-index cache — local-only, never meant to be committed.
+.serena/
