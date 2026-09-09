@@ -1,13 +1,17 @@
-"""draw — generate an image from a text prompt via Hugging Face Inference API.
+"""draw — generate images via Hugging Face or a ChatGPT subscription.
 
 Usage:
     draw "a cute robot" -o robot.png
     draw "a cute robot" --model black-forest-labs/FLUX.1-schnell -o robot.png
     echo "a cute robot" | draw -o robot.png
+    draw "a cute robot" --provider chatgpt -o robot.png
+    draw --provider chatgpt --check
     draw --version
 
 Env:
-    HF_TOKEN        Hugging Face access token (required)
+    DRAW_PROVIDER   hf (default), chatgpt or codex
+    DRAW_CODEX_BIN  Path to Codex CLI (default: codex)
+    HF_TOKEN        Hugging Face access token (HF provider only)
     HF_MODEL        Default model (default: black-forest-labs/FLUX.1-schnell)
 """
 from __future__ import annotations
@@ -60,7 +64,8 @@ SKILL_MD = """\
 ---
 name: draw
 description: >-
-  Generate images from a text prompt via Hugging Face (FLUX by default). Use when
+  Generate images via Hugging Face (FLUX by default) or a ChatGPT subscription
+  through the local Codex CLI (--provider chatgpt, no API key). Use when
   a task needs an image created from a description — placeholder or hero art, icons,
   concept sketches, mock assets, a diagram rendered as an image — produced from the
   shell without leaving the session, e.g. `draw "a cute robot" -o robot.png`.
@@ -71,25 +76,34 @@ metadata:
 
 # draw — text-to-image from the CLI
 
-Generate an image from any agent or shell via Hugging Face.
+Generate an image from any agent or shell via Hugging Face or ChatGPT/Codex.
 
 ## Invocation
 ```
 draw "a cute robot" -o robot.png        # prompt + output path (required)
 draw "..." --model <hf-id> -o out.png   # pick a Hugging Face model
 echo "a prompt" | draw -o out.png       # prompt from stdin
+draw "..." --provider chatgpt -o out.png # ChatGPT subscription, no API key
+draw "..." --provider chatgpt -i ref.png -o out.png # reference/edit
+draw --provider chatgpt --check         # local setup check, no generation
 ```
 
 ## When to use
 - The task needs a generated image/asset (placeholder, hero, icon, concept art).
 - You want to produce art inline without leaving the shell session.
 
-Needs `HF_TOKEN` (auto-loaded from `~/.config/draw-cli/.env`). Pair with
-`tg --photo out.png "caption"` to send the result to Telegram.
+HF needs `HF_TOKEN` (auto-loaded from `~/.config/draw-cli/.env`). ChatGPT needs
+current Codex CLI signed in with `codex login` using ChatGPT, not an API key.
+Set `DRAW_PROVIDER=chatgpt` in that .env to make it the default. Codex manages
+the image model: do not pass gpt-image IDs to --model or --codex-model.
+Image/version availability and limits follow the account rollout. Never fall
+back to a paid API or call draw recursively from its own Codex subprocess.
+Pair with `tg --photo out.png "caption"` to send the result to Telegram.
 """
 SKILL_BLURB = (
-    '`draw` — generate an image from text via Hugging Face: '
-    '`draw "prompt" -o out.png`. Use when a task needs a generated image/asset.'
+    '`draw` — generate an image: `draw "prompt" -o out.png` (Hugging Face), '
+    'or add `--provider chatgpt` for a ChatGPT subscription via Codex (no API key). '
+    'Use when a task needs a generated image/asset; never invoke recursively.'
 )
 
 _HOOK_MARKER = "# agent-tools-awareness"
@@ -248,9 +262,48 @@ def main() -> int:
         help="show program version and exit",
     )
     ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
-    ap.add_argument("-o", "--out", required=True, help="output image path")
-    ap.add_argument("--model", default=_default_model(), help="HF model id")
+    ap.add_argument("-o", "--out", help="output image path (required unless --check)")
+    ap.add_argument("--provider", choices=("hf", "chatgpt", "codex"),
+                    default=os.environ.get("DRAW_PROVIDER", "hf"),
+                    help="hf (default) or ChatGPT subscription via local Codex CLI")
+    ap.add_argument("--model", help="HF model id (HF_MODEL or FLUX by default; HF only)")
+    ap.add_argument("--codex-bin", default=os.environ.get("DRAW_CODEX_BIN", "codex"),
+                    help="Codex executable path/name (ChatGPT provider only)")
+    ap.add_argument("--codex-model", default=os.environ.get("DRAW_CODEX_MODEL"),
+                    help="Codex reasoning model, NOT the image model (normally omit)")
+    ap.add_argument("-i", "--image", action="append", default=[],
+                    help="reference/edit image; repeat up to five times (ChatGPT only)")
+    ap.add_argument("--timeout", type=int, default=600,
+                    help="Codex generation timeout in seconds (default: 600)")
+    ap.add_argument("--check", action="store_true",
+                    help="check Codex installation/login without generating an image")
     args = ap.parse_args()
+
+    if args.provider not in {"hf", "chatgpt", "codex"}:
+        ap.error("DRAW_PROVIDER must be hf, chatgpt or codex")
+    if args.timeout <= 0:
+        ap.error("--timeout must be positive")
+    if args.provider != "hf" and args.model is not None:
+        ap.error("--model is HF-only. Codex manages the ChatGPT image model; "
+                 "omit --model (GPT Image 2.5/Flare/Sunburst cannot be pinned here).")
+    if args.provider == "hf" and (args.image or args.check):
+        ap.error("--image and --check require --provider chatgpt (or codex)")
+    if args.check:
+        if args.prompt or args.out or args.image:
+            ap.error("--check does not accept a prompt, output path or reference images")
+        from draw_cli.codex import CodexError, inspect_codex
+        try:
+            installation = inspect_codex(args.codex_bin)
+        except (CodexError, OSError) as exc:
+            sys.stderr.write(f"draw: {exc}\n")
+            return 1
+        print(f"draw: {installation.version} ({installation.binary})")
+        print("draw: ChatGPT login and native image-generation client support detected.")
+        print("draw: no generation performed; model rollout/plan quota not verified. "
+              "The image model is managed by Codex, not pinned by draw.")
+        return 0
+    if not args.out:
+        ap.error("the following arguments are required: -o/--out")
 
     prompt = args.prompt
     if not prompt:
@@ -259,7 +312,21 @@ def main() -> int:
         if not prompt:
             ap.error("prompt is required (arg or stdin)")
 
-    generate(prompt, args.model, args.out)
+    if args.provider == "hf":
+        generate(prompt, args.model or _default_model(), args.out)
+    else:
+        from draw_cli.codex import CodexError, generate as generate_codex
+        try:
+            sys.stderr.write("draw: using ChatGPT subscription via Codex; image model is Codex-managed, not pinned.\n")
+            generate_codex(prompt, args.out, binary=args.codex_bin, model=args.codex_model,
+                           references=args.image, timeout=args.timeout)
+        except KeyboardInterrupt:
+            sys.stderr.write("draw: cancelled; local Codex process stopped.\n")
+            return 130
+        except (CodexError, OSError) as exc:
+            sys.stderr.write(f"draw: {exc}\n")
+            return 1
+        print(f"draw: saved {args.out} (ChatGPT subscription via Codex)")
     return 0
 
 
