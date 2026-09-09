@@ -1,173 +1,211 @@
 # draw-cli
 
-Generate images from text prompts via **Hugging Face** or a **ChatGPT subscription through
-the installed Codex CLI** — from any shell, script, or AI coding agent.
+`draw` is a small CLI for generating image files from a prompt. It has two backends:
 
-## ChatGPT subscription (no API key)
+- **ChatGPT / Codex** — uses the installed official Codex CLI signed in with ChatGPT. No OpenAI API key is required; usage follows the signed-in ChatGPT plan.
+- **Hugging Face** — uses `huggingface_hub.InferenceClient` with an `HF_TOKEN` and a selected HF model.
+
+The default remains Hugging Face for backward compatibility. Set `DRAW_PROVIDER=chatgpt` if you want ChatGPT/Codex to be the default.
+
+## Quick start: ChatGPT plan, no API key
 
 ```bash
 npm install -g @openai/codex@latest
-codex login                         # choose ChatGPT, not API-key login
-draw --provider chatgpt --check      # local setup check; no image generated
-draw "a cute robot" --provider chatgpt -o robot.png
+codex login
+
+pipx install --force git+https://github.com/alex-mextner/draw-cli
+draw install-skill
+
+draw --provider chatgpt --check
+draw "a tiny astronaut cat, editorial illustration" --provider chatgpt -o cat.png
 ```
 
-ChatGPT Desktop is not required. The adapter uses native Codex image generation,
-not an API-key imagegen skill, scraped credentials or window automation. It stops
-on errors instead of falling back to a separately billed API. Plan limits still apply.
+`codex login` must be authenticated with **ChatGPT**, not an API key. Signing in to Codex with ChatGPT uses the ChatGPT plan's Codex allowance; using a separate API key would use API billing, and this backend deliberately rejects API-key login. See OpenAI's [Codex plan documentation](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).
 
-**GPT Image 2.5:** OpenAI includes Codex in the Images 2.5 rollout, but the image model
-is managed by Codex. draw cannot independently pin or verify 2.5 / Flare / Sunburst.
-Do not pass image-model IDs to `--model` or `--codex-model`.
-See [setup, image editing, limits and model details](docs/chatgpt-subscription.md).
+There is **no API fallback**: if native Codex image generation is unavailable, refused, rate-limited, or fails, `draw` fails too. It does not silently switch to a separately billed OpenAI API request or to Hugging Face.
 
-Add `DRAW_PROVIDER=chatgpt` to `~/.config/draw-cli/.env` to make this the default.
-Without it, the existing Hugging Face default and commands are unchanged.
+## How it works
 
-## Why agents use this
+```mermaid
+flowchart TD
+    A[User / coding agent] --> B[draw CLI]
+    B --> C{provider}
 
-A coding agent can generate placeholder art, hero images, mock UI assets, or concept sketches
-inline from its shell session, without switching context or calling a web API manually.
+    C -->|hf| H[Hugging Face InferenceClient]
+    H --> HP[HF Inference Provider]
+    HP --> HS[Save requested output]
+
+    C -->|chatgpt / codex| V[Validate prompt, output path and references locally]
+    R[0-5 reference images] --> V
+    V --> P[Codex preflight: version, ChatGPT login, exec flags, image_generation feature]
+    P --> W[Fresh temporary workspace]
+    V --> W
+    W --> E[codex exec via stdin]
+    E --> I[Isolated Codex turn]
+    I --> G[Native image_gen tool]
+    G --> S[ChatGPT Images backend]
+    S --> N[Native PNG artifact]
+    N --> Q[Validate current thread UUID, file type, link count, size and image bytes]
+    Q --> O[Atomic replace of requested output]
+
+    P -. failure .-> X[Stop: no retry / no API fallback]
+    I -. refusal or quota .-> X
+    Q -. invalid or ambiguous artifact .-> X
+```
+
+For the ChatGPT path, `draw` does **not** extract browser cookies, copy Codex auth files, scrape tokens, or automate ChatGPT Desktop. Authentication remains owned by Codex in the existing `CODEX_HOME`. The child process receives a stripped environment without OpenAI/HF API-key overrides, runs in a fresh workspace, ignores user/project Codex config and rules for that turn, disables shell/web tools, and uses a read-only shell sandbox.
+
+The prompt is sent through stdin, not a shell command. Explicit reference images are validated first and then re-encoded into the temporary workspace. The result is accepted only from the current Codex thread namespace (or the fresh workspace artifact directory), must be one regular non-hardlinked PNG of at most **32 MiB**, and must decode as a valid image. The requested output is replaced atomically only after validation succeeds.
+
+### Limits enforced by draw
+
+- Prompt: at most **1 MiB** of UTF-8 text for the ChatGPT/Codex backend.
+- References: at most **five** images, each at most **32 MiB**.
+- Native output artifact: at most **32 MiB**.
+- Output formats: `.png`, `.jpg` / `.jpeg`, `.webp`.
+- Default Codex generation timeout: 600 seconds; there is no automatic generation retry.
+
+PNG preserves the native image bytes and metadata when the native artifact is already PNG. JPEG/WebP are actually re-encoded; JPEG alpha is flattened onto white.
+
+## ChatGPT Images 2.5: rollout vs model pinning
+
+OpenAI announced **ChatGPT Images 2.5 on September 8, 2026** and says it is rolling out to ChatGPT, ChatGPT Work, and Codex users. See the [Images 2.5 announcement](https://openai.com/index/introducing-chatgpt-images-2-5/) and [ChatGPT release notes](https://help.openai.com/en/articles/6825453).
+
+That does **not** mean this CLI can select `GPT-Image-2.5 Flare` or `Sunburst` by name. The native Codex image tool currently exposes prompt/reference inputs, not an image-model selector, and the inspected Codex source still uses an internal `gpt-image-2` request identifier. The server-side rollout is controlled by OpenAI. Therefore:
+
+- `draw --provider chatgpt` uses the native image backend available to the signed-in Codex account.
+- `--model` is **Hugging Face only**.
+- `--codex-model` selects the reasoning model that invokes the image tool, **not** the image generator.
+- Passing a GPT Image model ID as `--codex-model` is rejected rather than pretending it pinned the image model.
+
+Detailed implementation notes: [docs/chatgpt-subscription.md](docs/chatgpt-subscription.md).
+
+## Hugging Face backend
 
 ```bash
-# Generate a placeholder hero image for a landing page being built
-draw "minimalist SaaS dashboard hero, dark theme, 16:9" -o assets/hero.png
+# ~/.config/draw-cli/.env
+HF_TOKEN=hf_...
 
-# Produce an icon concept during component work
-draw "flat vector icon, a glowing terminal cursor, transparent background" -o src/icons/cursor.png
+# default HF model
+draw "a cute robot" -o robot.png
 
-# Pipe a dynamically assembled prompt from another tool
-echo "isometric 3D render of a microservice architecture diagram, pastel colors" | draw -o docs/arch.png
+# explicit HF model
+draw "a cute robot" --model black-forest-labs/FLUX.1-dev -o robot.png
 ```
 
-The output is a plain image file — drop it straight into the asset pipeline, send it to Figma,
-or attach it to a Telegram report via `tg --photo`.
+Hugging Face Inference Providers use account credits and may continue as paid usage depending on the account/billing configuration. A token authenticates the request; it does **not** by itself make inference unlimited or free. See [Hugging Face Inference Providers pricing](https://huggingface.co/docs/inference-providers/en/pricing).
 
 ## Install
 
-draw installs `huggingface_hub` (HF) + `Pillow` (both providers); the recommended path is **pipx** —
-an isolated venv with the deps and `draw` on your PATH:
+Recommended: **pipx**, which keeps Python dependencies isolated.
 
 ```bash
-pipx install git+https://github.com/alex-mextner/draw-cli
+pipx install --force git+https://github.com/alex-mextner/draw-cli
+draw install-skill
 ```
 
-**One-liner** (pipx-first: uses pipx if present, else symlinks `draw` into PATH and installs
-deps with `pip --user`; either way registers the agent skill):
+One-liner installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alex-mextner/draw-cli/main/install.sh | bash
 ```
 
-Finish with HF token setup or ChatGPT login (above), then run the skill registration step
-manually if you installed with raw pipx (the one-liner runs it for you):
+The package depends on `huggingface_hub` for the HF backend and `Pillow` for image validation/encoding. The ChatGPT backend additionally requires a current Codex CLI available on `PATH` (or via `--codex-bin`). ChatGPT Desktop is not required.
+
+## Usage
+
+```bash
+# Hugging Face (default)
+draw "a cute robot" -o robot.png
+
+# ChatGPT/Codex
+draw "a cute robot" --provider chatgpt -o robot.png
+
+# Prompt from stdin
+printf '%s\n' "minimal geometric poster" | draw --provider chatgpt -o poster.png
+
+# Native image edit/reference flow
+draw "keep the subject; make the background warm cream" \
+  --provider chatgpt -i source.png -o edited.png
+
+# Multiple references (max 5)
+draw "combine the composition and material language" \
+  --provider chatgpt -i composition.png -i materials.jpg -o combined.webp
+
+# Local preflight only; does not spend an image generation
+# and does not prove current image quota/model rollout.
+draw --provider chatgpt --check
+
+# Version
+draw --version
+```
+
+To make ChatGPT/Codex the default:
+
+```dotenv
+# ~/.config/draw-cli/.env
+DRAW_PROVIDER=chatgpt
+# Optional:
+# DRAW_CODEX_BIN=/opt/homebrew/bin/codex
+# DRAW_CODEX_MODEL=<reasoning-model>
+```
+
+## CLI flags
+
+| Flag | Applies to | Default | Meaning |
+|---|---|---|---|
+| `prompt` | both | — | Prompt argument; reads stdin when omitted. |
+| `-o`, `--out` | both | required | Output path. Not needed for `--check`. |
+| `--provider` | both | `hf` | `hf`, `chatgpt`, or `codex` (`codex` is an alias). |
+| `--model` | HF | `HF_MODEL` / FLUX default | Hugging Face model ID. |
+| `-i`, `--image` | ChatGPT | — | Reference/edit image; repeat up to five times. |
+| `--codex-bin` | ChatGPT | `codex` | Codex executable path/name. |
+| `--codex-model` | ChatGPT generation | Codex default | Reasoning model, not image model. |
+| `--timeout` | ChatGPT generation | `600` | Generation timeout in seconds. |
+| `--check` | ChatGPT | — | Local executable/login/capability preflight; no image generation. |
+| `-V`, `--version` | both | — | Print version and exit. |
+
+Provider-specific options fail closed instead of being silently ignored. For example, `--codex-model` with `--provider hf`, or `--timeout` together with `--check`, is an argument error.
+
+## Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `DRAW_PROVIDER` | Default provider: `hf`, `chatgpt`, or `codex`. |
+| `DRAW_CODEX_BIN` | Codex executable path/name. |
+| `DRAW_CODEX_MODEL` | Optional Codex reasoning model; not the image model. |
+| `CODEX_HOME` | Existing Codex home/auth location; defaults to `~/.codex`. |
+| `HF_TOKEN` | Hugging Face token; HF backend only. |
+| `HF_MODEL` | Default Hugging Face model ID. |
+
+## Testing
+
+The normal suite is offline: it uses a fake executable subprocess and never reads real Codex credentials or spends image usage.
+
+```bash
+python -m pip install 'pytest>=8,<9' Pillow
+python -m pytest tests/ -q
+```
+
+CI runs the suite on Python 3.9 and 3.12 on Linux, plus a macOS contract job for the Codex adapter. There are also explicitly opt-in live tests; see [docs/chatgpt-subscription.md](docs/chatgpt-subscription.md). The live path is not enabled in CI because it requires a user's ChatGPT login and may consume plan usage.
+
+The adversarial review and the RED→GREEN cases added for this backend are documented in [docs/adversarial-review.md](docs/adversarial-review.md).
+
+## Agent skill
 
 ```bash
 draw install-skill
 ```
 
-`install-skill` is idempotent — it writes a skill file to `~/.agents/skills/draw/` so Claude
-Code, Codex, opencode, and Gemini harnesses know `draw` exists. The one-liner runs it
-automatically.
-
-### Token setup (Hugging Face only)
-
-Skip this for `--provider chatgpt`. Create `~/.config/draw-cli/.env`:
-
-```
-HF_TOKEN=hf_...
-```
-
-Get a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-(a free-tier read token is enough for inference).
-
-## Usage
-
-```bash
-# Prompt as positional arg
-draw "a cute robot" -o robot.png
-
-# Override model
-draw "a cute robot" --model black-forest-labs/FLUX.1-dev -o robot.png
-
-# Prompt from stdin
-echo "a cute robot" | draw -o robot.png
-
-# Print version and exit (no -o needed)
-draw --version
-```
-
-## Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `prompt` (positional) | — | Text prompt. Reads from stdin if omitted. |
-| `-o / --out` | required except `--check` | Output image path (e.g. `out.png`). |
-| `--provider` | `hf` / `DRAW_PROVIDER` | `hf`, `chatgpt`, or `codex` (alias for `chatgpt`). |
-| `--model <hf-id>` | `black-forest-labs/FLUX.1-schnell` | Any HF text-to-image model ID. |
-| `-i / --image` | — | Reference/edit image, repeat up to five times (ChatGPT only). |
-| `--check` | — | Check local Codex/login/capabilities without generating (ChatGPT only). |
-| `--codex-bin` | `codex` | Path/name of the installed Codex executable. |
-| `--codex-model` | Codex default | Reasoning agent model, **not** an image model; normally omit. |
-| `--timeout` | `600` | Codex generation timeout in seconds; no automatic retry. |
-| `-V / --version` | — | Print the version (`draw <ver>`) and exit. Works without `-o`. |
-
-## Env vars
-
-| Variable | Description |
-|----------|-------------|
-| `HF_TOKEN` | Hugging Face access token. Auto-loaded from `~/.config/draw-cli/.env`. |
-| `HF_MODEL` | HF-only default model override (same effect as `--model`). |
-| `DRAW_PROVIDER` | Default provider: `hf`, `chatgpt`, or `codex`. |
-| `DRAW_CODEX_BIN` | Codex executable path/name. |
-| `DRAW_CODEX_MODEL` | Optional Codex reasoning model, not the image model. |
-| `CODEX_HOME` | Existing Codex home/authentication location (defaults to `~/.codex`). |
-
-## Requirements
-
-- Python 3.9+
-- For ChatGPT: a current Codex CLI, ChatGPT login and native image-generation access
-- [`huggingface_hub`](https://pypi.org/project/huggingface_hub/) and `Pillow` Python packages
-
----
-
-## How draw compares
-
-The other text-to-image CLIs trade off between *simple-but-locked-in* and
-*powerful-but-heavy*. Single-vendor tools (dallecli, openai-cli-art) are one `pip install`
-but hard-wired to OpenAI and a paid key. Model runners (Replicate CLI, simonw `llm`) are
-flexible but route through a paid hosted API or a general LLM harness. Local engines
-(comfy-cli / ComfyUI) are the most capable but pull in a full generative stack and a server.
-
-`draw` is the minimal middle: **one command**, **any Hugging Face text-to-image model** via
-`--model` (FLUX by default), runnable on a **free-tier HF token**, **stdin-pipeable** for
-agent-assembled prompts, and it **registers an agent skill** so harnesses discover it. It
-deliberately does *one* thing — prompt in, image file out. The optional ChatGPT provider
-also accepts reference images for native image editing; it does not add a local model server.
-
-| Tool | Model-agnostic | Free-tier path | Stdin pipe | No local server | Agent-skill registration | Single-purpose simplicity |
-|---|---|---|---|---|---|---|
-| **draw** | ✓ (any HF model) | ✓ (HF free token) | ✓ | ✓ | ✓ | ✓ |
-| dallecli | — (OpenAI only) | — (paid key) | — | ✓ | — | ~ (also edit/filter) |
-| openai-cli-art | — (OpenAI only) | — (paid key) | ~ | ✓ | — | ~ |
-| Replicate CLI | ✓ (any hosted model) | ~ (free credits) | ✓ | ✓ | — | — (generic runner) |
-| simonw `llm` (+ image plugins) | ✓ (via plugins) | ~ (depends on backend) | ✓ | ~ | — | — (general LLM CLI) |
-| comfy-cli / ComfyUI | ✓ (local + partner) | ✓ (local) | — | — (runs a server) | — | — (full stack) |
-
-`~` = partial. `draw` is not the most powerful — comfy-cli wins on local control and `llm`
-on breadth — but it is the lightest path from a shell prompt to an image file with no vendor
-lock-in and no server to babysit, which is exactly what a coding agent needs for placeholder
-and concept art.
+This installs the `draw` Agent Skill and small discovery blurbs for detected agent harnesses. The registration is idempotent. A recursion guard prevents the Codex subprocess used by `draw` from recursively invoking `draw` again.
 
 ## Ecosystem
 
 Part of the [HyperIDE.ai](https://hyperide.ai) agent toolchain:
 
-- **[tg-cli](https://github.com/alex-mextner/tg-cli)** — simple Telegram CLI to send messages, photos & files, and a two-way agent bridge (reports, Q→buttons, voice/rich)
-- **[review-cli](https://github.com/alex-mextner/review-cli)** — multi-model read-only code review from one command: diff review, cited quorum, brainstorm, visual review, and interactive spec-review tooling. Read-only, CLI-first, harness-agnostic.
-- **[rig-cli](https://github.com/alex-mextner/rig-cli)** — umbrella dev-env driver: sets up a repo from config — skills, hooks, CI, dep-bootstrap; reconciles drift
-- **[agent-tools](https://github.com/alex-mextner/agent-tools)** — the shared catalog `rig` applies: portable agent skills, agent-hooks, the global git-hook dispatcher, CI gates, and MCP servers
-- **[3d-cli](https://github.com/alex-mextner/3d-cli)** — scriptable CLI for the full 3D FDM lifecycle: modeling, mesh repair, slicing, and print monitoring
-- **[hyperide.ai](https://hyperide.ai)** — Figma replacement inside VS Code. Edit React components directly through AST/LSP without AI hallucinations, token waste, or context-window limits. Works for indie vibe-coding and for enterprise teams with split design/dev roles.
-
-Each CLI registers a skill into your agent harnesses (`<tool> install-skill`) so agents know it exists — see Install.
+- [tg-cli](https://github.com/alex-mextner/tg-cli) — Telegram CLI / agent bridge.
+- [review-cli](https://github.com/alex-mextner/review-cli) — multi-model read-only review tooling.
+- [rig-cli](https://github.com/alex-mextner/rig-cli) — dev-environment reconciliation and CI/skill setup.
+- [agent-tools](https://github.com/alex-mextner/agent-tools) — shared agent tools/catalog.
+- [3d-cli](https://github.com/alex-mextner/3d-cli) — scriptable FDM/3D workflow CLI.
+- [hyperide.ai](https://hyperide.ai) — design/code tooling for React workflows.
