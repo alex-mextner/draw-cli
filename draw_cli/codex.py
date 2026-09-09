@@ -303,7 +303,7 @@ def _read_artifact(
     home: Path,
     workspace: Path,
     thread_id: str,
-    _started: float | None = None,
+    _started: Optional[float] = None,
 ) -> bytes:
     """Read one native PNG from the current UUID namespace.
 
