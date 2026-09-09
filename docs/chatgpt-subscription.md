@@ -1,143 +1,150 @@
-# ChatGPT subscription images (Codex CLI)
+# ChatGPT plan images through Codex CLI
 
-`draw --provider chatgpt` delegates generation to the **official installed Codex CLI**,
-logged in using ChatGPT. It does not use an OpenAI API key, call an unofficial endpoint,
-extract browser cookies, read/copy authentication tokens, or automate desktop windows.
-`--provider codex` is an alias. ChatGPT Desktop is not required; installing Desktop
-alone does not provide this command-line integration.
+`draw --provider chatgpt` delegates image creation/editing to the **official installed Codex CLI** while Codex is signed in with ChatGPT. `--provider codex` is an alias.
+
+This path deliberately does **not**:
+
+- use an OpenAI API key;
+- call an unofficial ChatGPT endpoint;
+- extract browser cookies or copy Codex authentication files;
+- automate ChatGPT Desktop;
+- silently fall back to Hugging Face or a separately billed OpenAI API request.
+
+ChatGPT Desktop is therefore optional. The integration point is the Codex CLI.
 
 ## Setup on macOS
-
-Install or update Codex, then sign in with the account whose subscription you use:
 
 ```bash
 npm install -g @openai/codex@latest
 codex login
 codex login status
 
-# Install/update draw from main after this feature is merged.
 pipx install --force git+https://github.com/alex-mextner/draw-cli
 draw install-skill
 draw --provider chatgpt --check
 ```
 
-Choose **ChatGPT**, not API-key authentication. If Codex is already in API-key mode,
-switch it yourself with `codex logout` followed by `codex login`. draw never performs
-that switch for you. The existing `HOME`, `CODEX_HOME`, and Codex credential storage
-remain in use. A custom binary can be selected with `--codex-bin /path/to/codex`.
+Use **ChatGPT login**, not API-key login. If the CLI is currently configured for an API key, switch it yourself with `codex logout` and `codex login`. `draw` never changes the account or login method on the user's behalf.
 
-`--check` checks the executable, login status, required CLI options and native
-`image_generation` feature. It does not generate an image, contact the image service
-to verify entitlement, or certify which image model your account will receive.
-An old client is rejected before generation; update Codex instead of using an API fallback.
-The adapter is not macOS-specific, but authenticated generation must be tested on your
-own machine. CI is configured to exercise the offline subprocess contract on Linux and macOS.
+OpenAI documents that Codex is available through ChatGPT plans and that signing in with ChatGPT uses plan usage, while using an API key uses API pricing: <https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan>.
+
+`--check` is intentionally local. It checks:
+
+1. a Codex executable exists;
+2. `codex --version` works;
+3. `codex login status` reports ChatGPT login and not API-key login;
+4. `codex exec --help` exposes every flag the adapter depends on;
+5. `codex features list` advertises `image_generation`.
+
+It does **not** submit an image request, prove current quota, or attest which server-side image checkpoint the account will receive.
 
 ## Generate and edit
 
 ```bash
 draw "Кот-космонавт, акварель, белый фон" --provider chatgpt -o cat.png
-printf 'Minimal abstract gradient, square composition' | draw --provider chatgpt -o art.png
+
+printf '%s\n' 'Minimal abstract gradient, square composition' \
+  | draw --provider chatgpt -o art.png
 
 draw "Сохрани композицию, замени фон на кремовый" \
   --provider chatgpt -i source.png -o edited.png
 
-# Up to five explicitly supplied reference images; one output per invocation.
 draw "Combine these references into one composition" \
   --provider chatgpt -i first.png -i second.jpg -o combined.webp
 ```
 
-Use `.png` to retain the original image bytes and embedded metadata. JPEG/WebP outputs
-are actually encoded in their selected format, not just renamed; JPEG flattens alpha
-onto white. Re-encoding may discard original metadata. The output directory must already
-exist. Existing outputs are replaced atomically **only after** a valid image is received;
-errors leave them unchanged. Symlink destinations are rejected.
+Maximums enforced by `draw`:
 
-Set the default without changing existing HF scripts globally:
+- prompt: **1 MiB UTF-8**;
+- references: **5**;
+- each reference: **32 MiB**;
+- native output artifact: **32 MiB**.
 
-```bash
-DRAW_PROVIDER=chatgpt draw "A soft geometric landscape" -o landscape.png
-```
+Use `.png` when you want the native PNG bytes preserved. JPEG/WebP outputs are re-encoded; JPEG alpha is flattened onto white. Existing output files are replaced atomically only after the result validates successfully. A failed generation leaves the existing output unchanged.
 
-Or add this setting to `~/.config/draw-cli/.env` for all future draw invocations:
+## Exact flow
 
-```dotenv
-DRAW_PROVIDER=chatgpt
-# Optional when codex is not on PATH:
-# DRAW_CODEX_BIN=/opt/homebrew/bin/codex
-```
+1. `draw` validates the prompt, output path and all explicit reference images **before starting Codex**.
+2. The adapter runs the local Codex preflight described above.
+3. A fresh temporary workspace is created.
+4. References are re-read, validated again, and encoded as workspace-local PNG files.
+5. `codex exec` is launched without a shell. The user prompt is supplied on stdin.
+6. The child is forced to the OpenAI provider + ChatGPT login method for this invocation. User config and execpolicy rules are ignored; project instruction bytes are disabled; shell/web/agent/app features are disabled; the shell sandbox is read-only and approval policy is `never`.
+7. The Codex reasoning model invokes the native image-generation extension.
+8. `draw` parses JSONL events and requires one valid canonical UUID from `thread.started` plus `turn.completed`.
+9. The result must be exactly one native PNG in either:
+   - `CODEX_HOME/generated_images/<thread-id>/`, or
+   - the fresh workspace's `generated_images/` directory on executor-backed clients.
+10. The file must be a regular, non-hardlinked, non-symlinked file within the expected directory, at most 32 MiB, and decode as a valid image.
+11. Only then is the requested output atomically replaced.
 
-Hugging Face remains the default without this setting. `HF_TOKEN` and `HF_MODEL` apply
-only to the HF provider and are not required for subscription generation.
+The artifact lookup intentionally does **not** use wall-clock/mtime freshness. The `CODEX_HOME` path is already scoped by the canonical thread UUID returned by the current execution, while the alternate workspace directory is newly created and empty before the run. Depending on mutable wall-clock timestamps caused false negatives after clock changes or restored metadata without adding meaningful isolation.
 
-## GPT Image 2.5: availability is not a model pin
+The adapter never searches all of `CODEX_HOME` for the newest image and never trusts a path written in the model's final text.
 
-OpenAI's [Images 2.5 announcement](https://openai.com/index/introducing-chatgpt-images-2-5/)
-on September 8, 2026 includes Codex in the rollout. **draw does not have an independent
-switch that guarantees GPT Image 2.5, Flare, or Sunburst.** It uses whatever native image
-backend Codex makes available to the signed-in account.
+## Child process and authentication boundary
 
-At implementation review on September 9, the inspected native Codex tool had no image
-model argument and still used the internal request identifier `gpt-image-2`. The
-announcement and this client identifier are not proof that every CLI invocation uses
-the same server-side model. draw neither rewrites that identifier nor claims to verify
-the server's model. Keep Codex updated; exact checkpoint selection is unsupported here.
+The existing `HOME` and `CODEX_HOME` remain available so the official Codex client can use its normal ChatGPT authentication storage/keychain behavior. `draw` itself never reads or copies `auth.json` or OAuth tokens.
 
-`draw --model` remains **HF-only**. `--codex-model` / `DRAW_CODEX_MODEL` select the
-**reasoning agent** that invokes the image tool, not an image model. Normally omit them.
-Passing a GPT Image ID there is rejected rather than silently using another model.
-A prompt saying “use 2.5” cannot enforce a model selection either.
+Before launching the child, it removes OpenAI/Azure/HF API-key-style environment overrides such as `OPENAI_*`, `AZURE_OPENAI_*`, `CODEX_API_KEY`, and `HF_TOKEN`. That prevents an unrelated shell configuration from accidentally turning this route into API-key billing. The parent process environment is not modified.
 
-## Usage limits and failures
+Diagnostics are bounded and redact common bearer/JWT/key forms plus assignment-style `api_key`, `access_token`, `refresh_token`, OpenAI, Codex and HF secrets.
 
-The normal [Codex ChatGPT-plan rules](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
-apply, including entitlement, quotas and any additional usage configured in your account.
-This is not unlimited generation or an API-billing workaround. Both the Codex agent turn
-and image generation can consume the account's applicable allowances.
+The Codex executable itself is part of the trusted local computing base. These controls are defense-in-depth against accidental tool/config inheritance and prompt-induced behavior; they are not a sandbox against a malicious replacement `codex` binary running with the user's OS permissions.
 
-The adapter never automatically retries generation or falls back to HF, an API-key skill,
-or a separately billed OpenAI API. The agent is instructed to stop on refusal, tool
-unavailability or quota exhaustion. If it returns text without a native image, draw
-fails rather than accepting a fabricated file path or placeholder.
+## ChatGPT Images 2.5 is a rollout, not a CLI model selector
 
-The default generation timeout is 600 seconds; change it with `--timeout 900`. Local
-preflight commands have a separate 20-second timeout. Cancellation/timeout terminates
-the local process group on macOS/Linux. A request already submitted to the service may
-still finish and consume usage; killing the local process cannot undo it. Original native
-artifacts are left in Codex's cache; they are not automatically deleted by draw.
+OpenAI announced ChatGPT Images 2.5 on **September 8, 2026** and states that the rollout includes Codex users. See:
 
-## Implementation and verification
+- <https://openai.com/index/introducing-chatgpt-images-2-5/>
+- <https://help.openai.com/en/articles/6825453>
 
-The child runs in a fresh temporary workspace, with only explicitly provided references
-staged there. It uses read-only shell sandbox mode, disables shell tools and web search,
-and ignores user config, project instruction documents and execpolicy rules for this run.
-This avoids inheriting an alternate API provider or recursively invoking the installed
-`draw` skill. It does not modify the user's Codex configuration or relax managed policy.
-These controls are not a general-purpose security boundary against a malicious CLI binary.
+The public API additionally exposes GPT Image 2.5 Flare/Sunburst model names. The native Codex image tool is different: as reviewed on September 9, 2026, its tool arguments contain prompt/reference inputs but no image-model selector, while the client source still contains the internal request identifier `gpt-image-2`.
 
-The adapter obtains the current UUID from `thread.started` in `codex exec --json` and
-requires a successful `turn.completed`. It reads exactly one validated native PNG from
-`CODEX_HOME/generated_images/<thread_id>/`, with support for the fresh workspace's native
-`generated_images/` directory. It never searches globally for the newest file, reuses an
-old thread, or trusts an agent-authored output path. Linked, stale, oversized, corrupt
-and ambiguous artifacts are rejected. Prompts go through stdin, not shell interpolation.
+Therefore `draw` cannot honestly guarantee or pin `GPT-Image-2.5 Flare` or `Sunburst` for subscription usage. It invokes whatever native ChatGPT Images backend OpenAI exposes to that signed-in Codex account during rollout.
 
-Upstream contracts inspected:
+`--codex-model` / `DRAW_CODEX_MODEL` select the **reasoning model** that calls the image tool. They do not select the image generator. `--model` remains Hugging Face-only.
 
-- [CLI reference](https://developers.openai.com/codex/cli/reference/): `exec --json`,
-  `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, stdin prompts and image inputs.
-- [Native tool and image arguments](https://github.com/openai/codex/blob/38cbebaf3fe3e81a94bf462079e7cf9659fc9e50/codex-rs/ext/image-generation/src/tool.rs).
-- [Native artifact layout](https://github.com/openai/codex/blob/38cbebaf3fe3e81a94bf462079e7cf9659fc9e50/codex-rs/ext/image-generation/src/artifact.rs).
-- [Exec event protocol](https://github.com/openai/codex/blob/38cbebaf3fe3e81a94bf462079e7cf9659fc9e50/codex-rs/exec/src/exec_events.rs).
+Current upstream sources reviewed:
 
-Run offline adapter/CLI tests (fake executable; no credentials or paid requests):
+- Codex exec CLI flags: <https://github.com/openai/codex/blob/main/codex-rs/exec/src/cli.rs>
+- Native image tool: <https://github.com/openai/codex/blob/main/codex-rs/ext/image-generation/src/tool.rs>
+- Native image artifact layout: <https://github.com/openai/codex/blob/main/codex-rs/ext/image-generation/src/artifact.rs>
+- Exec JSONL event types: <https://github.com/openai/codex/blob/main/codex-rs/exec/src/exec_events.rs>
+
+## Failures, quota and cancellation
+
+The adapter performs **zero automatic image-generation retries**. A retry can consume plan allowance twice, so retry decisions belong to the caller/user.
+
+The default generation timeout is 600 seconds. `--timeout 900` changes the generation timeout only. Preflight commands use their own short timeout. `--timeout` is rejected with `--check` so the CLI never implies it affected a check when it did not.
+
+On timeout or cancellation, the local Codex process group is terminated on POSIX systems. A request that already reached OpenAI may still have consumed allowance; terminating a local process cannot reverse server-side usage.
+
+Native Codex artifacts are left in Codex's own generated-image cache. `draw` only copies/encodes the selected result to the requested destination.
+
+## Testing
+
+Offline suite:
 
 ```bash
 python -m pip install 'pytest>=8,<9' Pillow
-python -m pytest tests/test_codex.py tests/test_smoke.py tests/test_version.py -q
+python -m pytest tests/ -q
 ```
 
-These tests verify the process/protocol contract and failure handling, **not** live model
-availability, image quality or a completed generation on a user's subscription. The manual
-acceptance test is `draw --provider chatgpt --check`, followed by one actual generation on
-an authorized account and inspection of the resulting image.
+The fake executable tests exercise real subprocess boundaries but never use a real account, credentials, or paid request. CI runs Python 3.9 and 3.12 on Linux and a separate macOS adapter job.
+
+Optional live preflight (uses your real local Codex login but does not generate):
+
+```bash
+DRAW_LIVE_CODEX=1 python -m pytest tests/test_codex_live.py -q
+```
+
+Optional live generation (explicit because it may consume plan usage):
+
+```bash
+DRAW_LIVE_CODEX_GENERATE=1 python -m pytest tests/test_codex_live.py -q
+```
+
+The live generation test is never enabled by repository CI.
+
+The RED→GREEN adversarial cases and remaining accepted risks are tracked in [adversarial-review.md](adversarial-review.md).
