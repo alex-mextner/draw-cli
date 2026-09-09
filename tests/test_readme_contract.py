@@ -17,7 +17,7 @@ def test_readme_contains_how_it_works_mermaid_diagram():
 def test_readme_distinguishes_plan_usage_from_api_billing():
     assert "ChatGPT plan" in README
     assert "API key" in README
-    assert "no API fallback" in README.lower()
+    assert "no api fallback" in README.lower()
 
 
 def test_readme_does_not_claim_hf_token_means_free_inference():
