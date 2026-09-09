@@ -53,6 +53,11 @@ def _default_model() -> str:
     return os.environ.get("HF_MODEL", DEFAULT_MODEL)
 
 
+def _option_present(raw_args: list[str], option: str) -> bool:
+    """Whether an option was explicitly supplied, including --flag=value."""
+    return any(arg == option or arg.startswith(option + "=") for arg in raw_args)
+
+
 # --- install-skill: make agent harnesses aware this tool exists ----------------
 # Writes a SKILL.md (Agent Skills standard, ~/.agents/skills/) read by Claude
 # Code, Codex, opencode, Gemini, Cursor; a short always-on blurb into each
@@ -116,6 +121,7 @@ _HOOK_COMMAND = (
 
 def _detected(cmd: str, *dirs: str) -> bool:
     import shutil
+
     if shutil.which(cmd):
         return True
     return any(os.path.isdir(os.path.expanduser(d)) for d in dirs)
@@ -124,28 +130,36 @@ def _detected(cmd: str, *dirs: str) -> bool:
 def _append_marked(path, tool: str, blurb: str) -> None:
     import re
     from pathlib import Path
+
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     start, end = f"<!-- skill:{tool} -->", f"<!-- /skill:{tool} -->"
     existing = p.read_text(encoding="utf-8") if p.exists() else ""
-    existing = re.sub(re.escape(start) + r".*?" + re.escape(end) + r"\n?", "", existing, flags=re.S)
+    existing = re.sub(
+        re.escape(start) + r".*?" + re.escape(end) + r"\n?",
+        "",
+        existing,
+        flags=re.S,
+    )
     block = f"{start}\n{blurb}\n{end}\n"
-    p.write_text((existing.rstrip() + "\n\n" + block) if existing.strip() else block, encoding="utf-8")
+    p.write_text(
+        (existing.rstrip() + "\n\n" + block) if existing.strip() else block,
+        encoding="utf-8",
+    )
 
 
 def _ensure_sessionstart_hook(home) -> bool:
-    """Idempotently add a SessionStart hook to ~/.claude/settings.json that
-    surfaces installed agent CLIs. Returns True if settings were changed.
-    Conservative: never removes or rewrites unrelated config; backs up first."""
+    """Idempotently add a SessionStart hook to ~/.claude/settings.json."""
     import json
     from pathlib import Path
+
     settings = Path(home) / ".claude" / "settings.json"
     if not settings.parent.is_dir():
         return False
     try:
         data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
     except (json.JSONDecodeError, OSError):
-        return False  # don't clobber a file we can't parse
+        return False
     if not isinstance(data, dict):
         return False
     hooks = data.setdefault("hooks", {})
@@ -154,24 +168,24 @@ def _ensure_sessionstart_hook(home) -> bool:
     sessionstart = hooks.setdefault("SessionStart", [])
     if not isinstance(sessionstart, list):
         return False
-    # Already installed? (match our marker anywhere in existing commands)
     for group in sessionstart:
         for h in (group or {}).get("hooks", []) if isinstance(group, dict) else []:
             if isinstance(h, dict) and _HOOK_MARKER in str(h.get("command", "")):
                 return False
     sessionstart.append({"hooks": [{"type": "command", "command": _HOOK_COMMAND}]})
     if settings.exists():
-        settings.with_suffix(".json.bak").write_text(settings.read_text(encoding="utf-8"), encoding="utf-8")
+        settings.with_suffix(".json.bak").write_text(
+            settings.read_text(encoding="utf-8"), encoding="utf-8"
+        )
     settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return True
 
 
 def install_agent_skill(name: str, skill_md: str, blurb: str) -> int:
     from pathlib import Path
+
     home = Path.home()
     written = []
-
-    # Layer 1 — SKILL.md (Agent Skills standard) + blurb file for the hook.
     skill_dir = home / ".agents" / "skills" / name
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
@@ -180,7 +194,6 @@ def install_agent_skill(name: str, skill_md: str, blurb: str) -> int:
     blurbs.mkdir(parents=True, exist_ok=True)
     (blurbs / f"{name}.md").write_text(f"- {blurb}\n", encoding="utf-8")
 
-    # Claude Code also scans ~/.claude/skills — symlink for compatibility.
     claude_skills = home / ".claude" / "skills"
     if claude_skills.is_dir():
         link = claude_skills / name
@@ -190,7 +203,6 @@ def install_agent_skill(name: str, skill_md: str, blurb: str) -> int:
             except OSError:
                 pass
 
-    # Layer 2 — always-on blurb in each DETECTED harness's instruction file.
     harness_files = [
         ("claude", home / ".claude" / "CLAUDE.md", ("~/.claude",)),
         ("codex", home / ".codex" / "AGENTS.md", ("~/.codex",)),
@@ -202,10 +214,8 @@ def install_agent_skill(name: str, skill_md: str, blurb: str) -> int:
             _append_marked(path, name, blurb)
             written.append(str(path))
 
-    # Layer 3 — SessionStart hook (Claude Code) aggregating all installed tools.
-    if (home / ".claude").is_dir():
-        if _ensure_sessionstart_hook(home):
-            written.append("SessionStart hook -> ~/.claude/settings.json")
+    if (home / ".claude").is_dir() and _ensure_sessionstart_hook(home):
+        written.append("SessionStart hook -> ~/.claude/settings.json")
 
     for w in written:
         print(f"  ✓ {w}")
@@ -239,21 +249,17 @@ def generate(prompt: str, model: str, out_path: str) -> None:
     try:
         image.save(out_path)
     except (OSError, ValueError) as e:
-        # PIL raises ValueError when the output path has no/unknown extension
-        # (can't infer the format), OSError for filesystem/encode failures.
         sys.stderr.write(f"draw: cannot save {out_path}: {e}\n")
         sys.exit(1)
     print(f"draw: saved {out_path}")
 
 
 def main() -> int:
-    if sys.argv[1:] == ["install-skill"]:  # exact-match: `draw "install-skill" -o x` still draws
+    if sys.argv[1:] == ["install-skill"]:
         return install_skill()
+    raw_args = list(sys.argv[1:])
     _load_env()
     ap = argparse.ArgumentParser(description="Generate an image from a text prompt")
-    # action="version" short-circuits before required-arg validation, so
-    # `draw --version` works without -o. __version__ is the single source of truth
-    # (kept in sync with pyproject's [project] version).
     ap.add_argument(
         "-V",
         "--version",
@@ -263,35 +269,80 @@ def main() -> int:
     )
     ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
     ap.add_argument("-o", "--out", help="output image path (required unless --check)")
-    ap.add_argument("--provider", choices=("hf", "chatgpt", "codex"),
-                    default=os.environ.get("DRAW_PROVIDER", "hf"),
-                    help="hf (default) or ChatGPT subscription via local Codex CLI")
+    ap.add_argument(
+        "--provider",
+        choices=("hf", "chatgpt", "codex"),
+        default=os.environ.get("DRAW_PROVIDER", "hf"),
+        help="hf (default) or ChatGPT subscription via local Codex CLI",
+    )
     ap.add_argument("--model", help="HF model id (HF_MODEL or FLUX by default; HF only)")
-    ap.add_argument("--codex-bin", default=os.environ.get("DRAW_CODEX_BIN", "codex"),
-                    help="Codex executable path/name (ChatGPT provider only)")
-    ap.add_argument("--codex-model", default=os.environ.get("DRAW_CODEX_MODEL"),
-                    help="Codex reasoning model, NOT the image model (normally omit)")
-    ap.add_argument("-i", "--image", action="append", default=[],
-                    help="reference/edit image; repeat up to five times (ChatGPT only)")
-    ap.add_argument("--timeout", type=int, default=600,
-                    help="Codex generation timeout in seconds (default: 600)")
-    ap.add_argument("--check", action="store_true",
-                    help="check Codex installation/login without generating an image")
+    ap.add_argument(
+        "--codex-bin",
+        default=os.environ.get("DRAW_CODEX_BIN", "codex"),
+        help="Codex executable path/name (ChatGPT provider only)",
+    )
+    ap.add_argument(
+        "--codex-model",
+        default=os.environ.get("DRAW_CODEX_MODEL"),
+        help="Codex reasoning model, NOT the image model (normally omit)",
+    )
+    ap.add_argument(
+        "-i",
+        "--image",
+        action="append",
+        default=[],
+        help="reference/edit image; repeat up to five times (ChatGPT only)",
+    )
+    ap.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Codex generation timeout in seconds (default: 600)",
+    )
+    ap.add_argument(
+        "--check",
+        action="store_true",
+        help="check Codex installation/login without generating an image",
+    )
     args = ap.parse_args()
 
     if args.provider not in {"hf", "chatgpt", "codex"}:
         ap.error("DRAW_PROVIDER must be hf, chatgpt or codex")
+
+    explicit_codex_generation_flags = [
+        flag
+        for flag in ("--codex-model", "--timeout")
+        if _option_present(raw_args, flag)
+    ]
+    explicit_codex_flags = [
+        flag
+        for flag in ("--codex-bin", "--codex-model", "--timeout")
+        if _option_present(raw_args, flag)
+    ]
+
+    if args.provider == "hf":
+        if args.image or args.check or explicit_codex_flags:
+            detail = ", ".join(explicit_codex_flags) if explicit_codex_flags else "--image/--check"
+            ap.error(f"{detail} require --provider chatgpt (or codex)")
+    elif args.model is not None:
+        ap.error(
+            "--model is HF-only. Codex manages the ChatGPT image model; "
+            "omit --model (GPT Image 2.5/Flare/Sunburst cannot be pinned here)."
+        )
+
     if args.timeout <= 0:
         ap.error("--timeout must be positive")
-    if args.provider != "hf" and args.model is not None:
-        ap.error("--model is HF-only. Codex manages the ChatGPT image model; "
-                 "omit --model (GPT Image 2.5/Flare/Sunburst cannot be pinned here).")
-    if args.provider == "hf" and (args.image or args.check):
-        ap.error("--image and --check require --provider chatgpt (or codex)")
+
     if args.check:
         if args.prompt or args.out or args.image:
             ap.error("--check does not accept a prompt, output path or reference images")
+        if explicit_codex_generation_flags:
+            ap.error(
+                "--check does not perform generation and therefore does not accept "
+                + ", ".join(explicit_codex_generation_flags)
+            )
         from draw_cli.codex import CodexError, inspect_codex
+
         try:
             installation = inspect_codex(args.codex_bin)
         except (CodexError, OSError) as exc:
@@ -299,9 +350,12 @@ def main() -> int:
             return 1
         print(f"draw: {installation.version} ({installation.binary})")
         print("draw: ChatGPT login and native image-generation client support detected.")
-        print("draw: no generation performed; model rollout/plan quota not verified. "
-              "The image model is managed by Codex, not pinned by draw.")
+        print(
+            "draw: no generation performed; model rollout/plan quota not verified. "
+            "The image model is managed by Codex, not pinned by draw."
+        )
         return 0
+
     if not args.out:
         ap.error("the following arguments are required: -o/--out")
 
@@ -316,10 +370,20 @@ def main() -> int:
         generate(prompt, args.model or _default_model(), args.out)
     else:
         from draw_cli.codex import CodexError, generate as generate_codex
+
         try:
-            sys.stderr.write("draw: using ChatGPT subscription via Codex; image model is Codex-managed, not pinned.\n")
-            generate_codex(prompt, args.out, binary=args.codex_bin, model=args.codex_model,
-                           references=args.image, timeout=args.timeout)
+            sys.stderr.write(
+                "draw: using ChatGPT subscription via Codex; "
+                "image model is Codex-managed, not pinned.\n"
+            )
+            generate_codex(
+                prompt,
+                args.out,
+                binary=args.codex_bin,
+                model=args.codex_model,
+                references=args.image,
+                timeout=args.timeout,
+            )
         except KeyboardInterrupt:
             sys.stderr.write("draw: cancelled; local Codex process stopped.\n")
             return 130
