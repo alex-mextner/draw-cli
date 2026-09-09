@@ -13,8 +13,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, PngImagePlugin
 
-# Match the existing source-checkout tests when invoked by the pytest executable.
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -38,7 +37,7 @@ if args == ["login", "status"]:
     raise SystemExit(1 if mode == "noauth" else 0)
 if args == ["exec", "--help"]:
     print("--json --ephemeral" if mode == "old" else
-          "--ignore-user-config --ignore-rules --ephemeral --json")
+          "--ignore-user-config --ignore-rules --ephemeral --json --skip-git-repo-check --sandbox --cd --image --color")
     raise SystemExit(0)
 if args == ["features", "list"]:
     print("shell_tool stable true" if mode == "nofeature" else "image_generation stable false")
@@ -124,7 +123,7 @@ def test_subscription_pipeline_and_safety_flags(fake, tmp_path, monkeypatch, png
     codex.generate(prompt, str(output), binary=str(fake[0]))
     assert output.read_bytes() == png
     calls = records(fake)
-    assert len(calls) == 6  # four checks, one execution, one execution record
+    assert len(calls) == 6
     argv, run = calls[-2]["argv"], calls[-1]
     assert run["prompt"] == prompt and prompt not in argv
     assert run["cwd"] == run["workspace"] != str(tmp_path)
@@ -141,7 +140,7 @@ def test_subscription_pipeline_and_safety_flags(fake, tmp_path, monkeypatch, png
     assert "--model" not in argv and not any("gpt-image" in a for a in argv)
     assert "--yolo" not in argv and "--dangerously-bypass-approvals-and-sandbox" not in argv
     assert (fake[1] / "generated_images" / THREAD / "call_1.png").read_bytes() == png
-    assert os.environ["OPENAI_API_KEY"] == "secret-not-forwarded"  # parent unchanged
+    assert os.environ["OPENAI_API_KEY"] == "secret-not-forwarded"
 
 
 @pytest.mark.parametrize("suffix,fmt", [("png", "PNG"), ("jpg", "JPEG"), ("jpeg", "JPEG"), ("webp", "WEBP")])
@@ -156,6 +155,13 @@ def test_output_format_is_real_not_just_renamed(fake, tmp_path, suffix, fmt):
 
 def test_workspace_native_artifact(fake, tmp_path, monkeypatch, png):
     monkeypatch.setenv("FAKE_MODE", "workspace")
+    output = tmp_path / "out.png"
+    codex.generate("cat", str(output), binary=str(fake[0]))
+    assert output.read_bytes() == png
+
+
+def test_old_mtime_in_current_thread_is_still_valid(fake, tmp_path, monkeypatch, png):
+    monkeypatch.setenv("FAKE_MODE", "oldartifact")
     output = tmp_path / "out.png"
     codex.generate("cat", str(output), binary=str(fake[0]))
     assert output.read_bytes() == png
@@ -199,7 +205,7 @@ def test_missing_binary_and_recursion(fake, monkeypatch):
 @pytest.mark.parametrize("mode,match", [
     ("nonzero", "status 7"), ("failed", "image quota exceeded"),
     ("textonly", "no native image artifact"), ("corrupt", "invalid image"),
-    ("multiple", "multiple image artifacts"), ("oldartifact", "no native image artifact"),
+    ("multiple", "multiple image artifacts"),
     ("symlink", "linked Codex image"), ("incomplete", "completed new thread"),
 ])
 def test_failures_preserve_output_and_do_not_retry(fake, tmp_path, monkeypatch, mode, match):
@@ -239,12 +245,12 @@ def test_bad_inputs_fail_before_client(fake, tmp_path, kwargs, match):
     assert not fake[2].exists()
 
 
-def test_invalid_reference_has_no_generation(fake, tmp_path):
+def test_invalid_reference_has_no_codex_process_at_all(fake, tmp_path):
     reference = tmp_path / "bad.png"
     reference.write_text("not an image")
     with pytest.raises(codex.CodexError, match="invalid image"):
         codex.generate("edit", str(tmp_path / "out.png"), binary=str(fake[0]), references=[str(reference)])
-    assert not any("prompt" in r for r in records(fake))
+    assert not fake[2].exists()
 
 
 def test_symlink_output_and_missing_parent_fail_before_generation(fake, tmp_path):
@@ -358,8 +364,10 @@ def test_oversized_output_is_bounded(fake, monkeypatch):
 def test_save_failure_does_not_replace_existing(tmp_path, png, monkeypatch):
     output = tmp_path / "out.png"
     output.write_bytes(b"existing")
+
     def fail(*args):
         raise OSError("test replace failure")
+
     monkeypatch.setattr(codex.os, "replace", fail)
     with pytest.raises(OSError, match="replace failure"):
         codex._save(png, output)
