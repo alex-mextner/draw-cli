@@ -3,19 +3,16 @@
 # Works both from a local clone (./install.sh) and piped from curl:
 #   curl -fsSL https://raw.githubusercontent.com/alex-mextner/draw-cli/main/install.sh | bash
 #
-# draw's runtime deps (huggingface_hub + Pillow) are REQUIRED, so this installer is
-# PIPX-FIRST: when pipx is present it gets an isolated venv with the deps + `draw` on
-# PATH. Without pipx it falls back to a symlink + `pip install --user`.
+# draw's Python runtime deps (huggingface_hub + Pillow) are installed here.
+# The optional ChatGPT backend additionally uses the separately installed Codex CLI.
 set -euo pipefail
 
-# ── identity ──────────────────────────────────────────────────────────────────
 TOOL="draw"
 REPO="draw-cli"
 GITHUB_USER="alex-mextner"
-ENTRY="bin/draw"     # path inside repo root
+ENTRY="bin/draw"
 CLONE_BASE="${XDG_DATA_HOME:-$HOME/.local/share}"
 
-# ── locate source dir ─────────────────────────────────────────────────────────
 _script_dir=""
 if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" ]]; then
   _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,7 +41,6 @@ else
   SRC="$CLONE_DIR"
 fi
 
-# ── bin dir ───────────────────────────────────────────────────────────────────
 BIN="${PIPX_BIN_DIR:-$HOME/.local/bin}"
 mkdir -p "$BIN"
 
@@ -56,18 +52,12 @@ if [[ ":$PATH:" != *":$BIN:"* ]]; then
   echo ""
 fi
 
-# ── install ───────────────────────────────────────────────────────────────────
-# PIPX-FIRST: an isolated venv carries huggingface_hub + Pillow with zero pollution of
-# the system/user site-packages, and `pipx install --force` makes re-runs idempotent.
 DRAW_BIN=""
 INSTALL_MODE=""
 if command -v pipx >/dev/null 2>&1; then
   INSTALL_MODE="pipx"
   echo "draw: installing via pipx (isolated venv with huggingface_hub + Pillow)"
   pipx install --force "$SRC"
-  # Resolve the entry point pipx just dropped. Prefer the expected $BIN/$TOOL; if pipx
-  # landed it elsewhere, fall back to whatever is now on PATH. If NEITHER resolves to an
-  # executable, fail fast — never continue with an empty or foreign binary below.
   if [[ -x "$BIN/$TOOL" ]]; then
     DRAW_BIN="$BIN/$TOOL"
   else
@@ -85,8 +75,6 @@ else
   echo "  For a clean ISOLATED install (recommended), install pipx and re-run:"
   echo "    python3 -m pip install --user pipx && python3 -m pipx ensurepath"
   echo ""
-  # Runtime deps are REQUIRED: use the SAME python3 for the import check and the install,
-  # and pull every dep (huggingface_hub + Pillow, needed to save images).
   if ! python3 -c 'import huggingface_hub, PIL' 2>/dev/null; then
     echo "draw: installing runtime deps via: python3 -m pip install --user huggingface_hub Pillow"
     if ! python3 -m pip install --user huggingface_hub Pillow; then
@@ -105,9 +93,6 @@ else
   echo "draw: symlinked $BIN/$TOOL -> $ENTRY_PATH"
 fi
 
-# ── shadow check ──────────────────────────────────────────────────────────────
-# We installed `draw` at $DRAW_BIN, but a different `draw` EARLIER on PATH silently wins.
-# Just WARN (don't touch it — it may be intentional); the user resolves the PATH order.
 RESOLVED="$(command -v "$TOOL" 2>/dev/null || true)"
 if [[ -n "$RESOLVED" && "$RESOLVED" != "$DRAW_BIN" ]]; then
   echo ""
@@ -118,20 +103,11 @@ if [[ -n "$RESOLVED" && "$RESOLVED" != "$DRAW_BIN" ]]; then
   echo ""
 fi
 
-# ── register skill ────────────────────────────────────────────────────────────
-# Invoke OUR install (absolute path), never the bare name — a PATH shadow would otherwise
-# run a different binary.
 if ! "$DRAW_BIN" install-skill; then
   echo "  WARNING: '$TOOL install-skill' failed — $TOOL is installed but agents may not"
   echo "           auto-discover it. Re-run '$TOOL install-skill' manually to fix."
 fi
 
-# ── done ──────────────────────────────────────────────────────────────────────
-# Gate the success report on PATH resolution: pipx/symlink drops $DRAW_BIN, but if $BIN is
-# not on PATH then `draw` by NAME does not work. Don't report a clean "installed" in that
-# case — warn loudly so the user fixes PATH instead of believing the bare command works.
-# (The shadow check above only fires when a DIFFERENT `draw` resolves; an unreachable $BIN
-# leaves RESOLVED empty, so it stays silent — this closes that gap.)
 PATH_RESOLVED="$(command -v "$TOOL" 2>/dev/null || true)"
 if [[ -z "$PATH_RESOLVED" ]]; then
   echo "" >&2
@@ -146,9 +122,18 @@ fi
 
 echo ""
 echo "  draw is installed (via $INSTALL_MODE)."
-echo "  Usage: draw \"a cute robot\" -o robot.png   — generate image from prompt"
-echo "         draw --model <hf-model-id> ...    — use a specific HF model"
-echo "         draw --help                       — full usage"
-echo "  Auth:  set HF_TOKEN env var or put it in ~/.config/draw-cli/.env"
-echo "  Tip:   pipx is the primary path — 'pipx install git+https://github.com/$GITHUB_USER/$REPO'"
+echo ""
+echo "  Hugging Face (default):"
+echo "    draw \"a cute robot\" -o robot.png"
+echo "    Auth: set HF_TOKEN or put it in ~/.config/draw-cli/.env"
+echo ""
+echo "  ChatGPT plan via Codex (no OpenAI API key):"
+echo "    npm install -g @openai/codex@latest"
+echo "    codex login                 # sign in with ChatGPT"
+echo "    draw --backend chatgpt --check"
+echo "    draw \"a cute robot\" --backend chatgpt -o robot.png"
+echo ""
+echo "  Make ChatGPT the default with DRAW_BACKEND=chatgpt."
+echo "  Full usage: draw --help"
+echo "  Docs: https://github.com/$GITHUB_USER/$REPO#readme"
 echo ""

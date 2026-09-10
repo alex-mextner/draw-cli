@@ -1,4 +1,20 @@
-"""draw — text-to-image via hosted APIs, Diffusers, or stable-diffusion.cpp."""
+"""draw — generate images via Hugging Face, Stability API, local Diffusers, native
+Metal/GGUF, or a ChatGPT subscription through the local Codex CLI.
+
+Usage:
+    draw "a cute robot" -o robot.png
+    draw "a cute robot" --model black-forest-labs/FLUX.1-schnell -o robot.png
+    echo "a cute robot" | draw -o robot.png
+    draw "a cute robot" --backend chatgpt -o robot.png
+    draw --backend chatgpt --check
+    draw --version
+
+Env:
+    DRAW_BACKEND    hf (default), api, stability, local, sdcpp, chatgpt or codex
+    DRAW_CODEX_BIN  Path to Codex CLI (default: codex)
+    HF_TOKEN        Hugging Face access token (HF backend only)
+    HF_MODEL        Default model (default: black-forest-labs/FLUX.1-schnell)
+"""
 from __future__ import annotations
 
 import argparse
@@ -38,14 +54,21 @@ def _default_model() -> str:
     return os.environ.get("HF_MODEL", DEFAULT_MODEL)
 
 
+def _option_present(raw_args: list[str], option: str) -> bool:
+    """Whether an option was explicitly supplied, including --flag=value."""
+    return any(arg == option or arg.startswith(option + "=") for arg in raw_args)
+
+
 SKILL_NAME = "draw"
 SKILL_MD = """\
 ---
 name: draw
 description: >-
   Generate images via Hugging Face (FLUX by default), Stability API, local
-  Diffusers or stable-diffusion.cpp with Metal/GGUF and resource checks.
-  Use when a task needs an image created from a description in the shell.
+  Diffusers or stable-diffusion.cpp with Metal/GGUF and resource checks, or a
+  ChatGPT subscription through the local Codex CLI (--backend chatgpt/codex,
+  no API key). Use when a task needs an image created from a description in
+  the shell, e.g. `draw "a cute robot" -o robot.png`.
 metadata:
   author: alex-mextner
   repo: https://github.com/alex-mextner/draw-cli
@@ -62,6 +85,9 @@ draw --check-resources --json
 draw "..." --backend local --offload auto -o out.png
 draw --backend sdcpp --quantization q4_0 --check-resources --json
 draw "..." --backend sdcpp --quantization q4_0 --seed 42 -o out.png
+draw "..." --backend chatgpt -o out.png              # ChatGPT subscription, no API key
+draw "..." --backend chatgpt -i ref.png -o out.png    # reference/edit
+draw --backend chatgpt --check                        # local Codex setup check
 ```
 
 API credentials: HF_TOKEN for Hugging Face, STABILITY_API_KEY for Stability.
@@ -78,10 +104,20 @@ CPU inference requires explicit --device cpu. Do not change system GPU memory
 limits, switch backends, download weights or make paid calls without the user
 requesting that mode. See docs/apple-silicon.md for native engine setup and
 comparison with Draw Things CLI and MLX alternatives.
+
+ChatGPT (--backend chatgpt/codex) needs the current Codex CLI signed in with
+`codex login` using a ChatGPT plan, not an API key. Set DRAW_BACKEND=chatgpt in
+that .env to make it the default. Codex manages the image model: do not pass
+gpt-image IDs to --model or --codex-model. Image/version availability and
+limits follow the account rollout. Never fall back to a paid API or call draw
+recursively from its own Codex subprocess. Pair with `tg --photo out.png
+"caption"` to send the result to Telegram.
 """
 SKILL_BLURB = (
-    '`draw` — generate an image via APIs, local Diffusers or Metal/GGUF: '
-    '`draw "prompt" -o out.png`. Use when a task needs a generated image/asset.'
+    '`draw` — generate an image via APIs, local Diffusers, Metal/GGUF, or a '
+    'ChatGPT subscription via Codex (`--backend chatgpt`, no API key): '
+    '`draw "prompt" -o out.png`. Use when a task needs a generated image/asset; '
+    'never invoke recursively.'
 )
 
 # Preserve the existing agent-harness installation behavior.
@@ -144,15 +180,19 @@ def _finite_float(value: str) -> float:
 def main() -> int:
     if sys.argv[1:] == ["install-skill"]:
         return install_skill()
+    raw_args = list(sys.argv[1:])
     _load_env()
     from draw_cli.backends import ASPECT_RATIOS, SD35_MODEL, normalize_model, safe_error
-    ap = argparse.ArgumentParser(description="Generate images via APIs, Diffusers or Metal/GGUF")
+    ap = argparse.ArgumentParser(description="Generate images via APIs, Diffusers, Metal/GGUF, or ChatGPT",
+                                 allow_abbrev=False)
     ap.add_argument("-V", "--version", action="version", version=f"draw {__version__}")
     ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
-    ap.add_argument("-o", "--out", help="output image path (required except for resource checks)")
-    ap.add_argument("--backend", choices=("hf", "api", "stability", "local", "sdcpp"),
-                    help="hf/api: Hugging Face; stability: Stability AI; local: Diffusers; sdcpp: native GGUF")
-    ap.add_argument("--model", help="HF model ID or sd3.5 alias; non-HF backends default to SD 3.5 Large")
+    ap.add_argument("-o", "--out", help="output image path (required except for resource/Codex checks)")
+    ap.add_argument("--backend", choices=("hf", "api", "stability", "local", "sdcpp", "chatgpt", "codex"),
+                    help="hf/api: Hugging Face; stability: Stability AI; local: Diffusers; "
+                         "sdcpp: native GGUF; chatgpt/codex: ChatGPT subscription via local Codex CLI")
+    ap.add_argument("--model", help="HF model ID or sd3.5 alias; non-HF backends default to SD 3.5 Large; "
+                                    "omit for chatgpt/codex (Codex manages the image model)")
     ap.add_argument("--provider", help="Hugging Face Inference Provider (default: auto)")
     ap.add_argument("--negative-prompt")
     ap.add_argument("--seed", type=_int_range(0, 2**32 - 1))
@@ -161,7 +201,8 @@ def main() -> int:
     ap.add_argument("--steps", type=_int_range(1, 100), help="HF/local steps (local engines default: 28)")
     ap.add_argument("--guidance-scale", type=_finite_float, help="HF/local guidance (local engines default: 3.5)")
     ap.add_argument("--aspect-ratio", choices=ASPECT_RATIOS, help="Stability API only (default: 1:1)")
-    ap.add_argument("--timeout", type=_finite_float, help="API timeout in seconds (default: 300)")
+    ap.add_argument("--timeout", type=_finite_float,
+                    help="API/Codex timeout in seconds (default: 300 API, 600 chatgpt/codex)")
     ap.add_argument("--device", help="Diffusers: auto/cuda/cuda:N/mps/cpu; sdcpp: auto/metal/mps/cpu")
     ap.add_argument("--dtype", choices=("auto", "float16", "bfloat16", "float32"))
     ap.add_argument("--offload", choices=("auto", "none", "model", "sequential"))
@@ -175,13 +216,46 @@ def main() -> int:
     ap.add_argument("--sdcpp-memory", choices=("resident", "disk"), help="native weight residency (default: resident)")
     ap.add_argument("--no-flash-attention", action="store_true", help="sdcpp: disable diffusion Flash Attention")
     ap.add_argument("--native-timeout", type=_finite_float, help="sd-cli time limit, including load (default: 3600s)")
+    ap.add_argument("--codex-bin", default=os.environ.get("DRAW_CODEX_BIN", "codex"),
+                    help="Codex executable path/name (chatgpt/codex backend only)")
+    ap.add_argument("--codex-model", default=os.environ.get("DRAW_CODEX_MODEL"),
+                    help="Codex reasoning model, NOT the image model (normally omit)")
+    ap.add_argument("-i", "--image", action="append", default=[],
+                    help="reference/edit image; repeat up to five times (chatgpt/codex only)")
+    ap.add_argument("--check", action="store_true",
+                    help="check Codex installation/login without generating an image (chatgpt/codex only)")
     args = ap.parse_args()
 
     backend = args.backend or os.environ.get("DRAW_BACKEND") or ("local" if args.check_resources else "hf")
     backend = "hf" if backend == "api" else backend
-    if backend not in ("hf", "stability", "local", "sdcpp"):
-        ap.error("DRAW_BACKEND must be hf, api, stability, local or sdcpp")
+    if backend not in ("hf", "stability", "local", "sdcpp", "chatgpt", "codex"):
+        ap.error("DRAW_BACKEND must be hf, api, stability, local, sdcpp, chatgpt or codex")
+    codex_backend = backend in ("chatgpt", "codex")
     local_backend = backend in ("local", "sdcpp")
+
+    explicit_codex_generation_flags = [
+        flag for flag in ("--codex-model", "--timeout") if _option_present(raw_args, flag)
+    ]
+    explicit_codex_flags = [
+        flag for flag in ("--codex-bin", "--codex-model") if _option_present(raw_args, flag)
+    ]
+    hf_only_flags = [
+        flag for flag in ("--seed", "--negative-prompt", "--width", "--height", "--steps", "--guidance-scale")
+        if _option_present(raw_args, flag)
+    ]
+    if not codex_backend:
+        if args.image or args.check or explicit_codex_flags:
+            detail = ", ".join(explicit_codex_flags) if explicit_codex_flags else "--image/--check"
+            ap.error(f"{detail} require --backend chatgpt (or codex)")
+    else:
+        if args.model is not None:
+            ap.error(
+                "--model is HF-only. Codex manages the ChatGPT image model; "
+                "omit --model (GPT Image 2.5/Flare/Sunburst cannot be pinned here)."
+            )
+        if hf_only_flags:
+            ap.error(", ".join(hf_only_flags) + " require --backend hf/stability/local/sdcpp")
+
     if args.check_resources and not local_backend:
         ap.error("--check-resources requires --backend local or sdcpp")
     if args.json and not args.check_resources:
@@ -205,7 +279,61 @@ def main() -> int:
         ap.error("Stability API mode does not expose --width/--height/--steps/--guidance-scale; "
                  "use --aspect-ratio, or choose hf/local")
     if args.timeout is not None and (local_backend or args.timeout <= 0):
-        ap.error("--timeout must be positive and applies only to API backends")
+        ap.error("--timeout must be positive and applies only to API/Codex backends")
+
+    if codex_backend:
+        if args.check:
+            if args.prompt or args.out or args.image:
+                ap.error("--check does not accept a prompt, output path or reference images")
+            if explicit_codex_generation_flags:
+                ap.error(
+                    "--check does not perform generation and therefore does not accept "
+                    + ", ".join(explicit_codex_generation_flags)
+                )
+            from draw_cli.codex import CodexError, inspect_codex
+            try:
+                installation = inspect_codex(args.codex_bin)
+            except (CodexError, OSError) as exc:
+                sys.stderr.write(f"draw: {exc}\n")
+                return 1
+            print(f"draw: {installation.version} ({installation.binary})")
+            print("draw: ChatGPT login and native image-generation client support detected.")
+            print(
+                "draw: no generation performed; model rollout/plan quota not verified. "
+                "The image model is managed by Codex, not pinned by draw."
+            )
+            return 0
+        if not args.out:
+            ap.error("the following arguments are required: -o/--out")
+        prompt = args.prompt
+        if not prompt:
+            if not sys.stdin.isatty():
+                prompt = sys.stdin.read().strip()
+            if not prompt:
+                ap.error("prompt is required (arg or stdin)")
+        from draw_cli.codex import CodexError, generate as generate_codex
+        try:
+            sys.stderr.write(
+                "draw: using ChatGPT subscription via Codex; "
+                "image model is Codex-managed, not pinned.\n"
+            )
+            generate_codex(
+                prompt,
+                args.out,
+                binary=args.codex_bin,
+                model=args.codex_model,
+                references=args.image,
+                timeout=args.timeout or 600,
+            )
+        except KeyboardInterrupt:
+            sys.stderr.write("draw: cancelled; local Codex process stopped.\n")
+            return 130
+        except (CodexError, OSError) as exc:
+            sys.stderr.write(f"draw: {exc}\n")
+            return 1
+        print(f"draw: saved {args.out} (ChatGPT subscription via Codex)")
+        return 0
+
     model = normalize_model(args.model or (_default_model() if backend == "hf" else SD35_MODEL))
     if backend != "hf" and model != SD35_MODEL:
         ap.error("local/stability modes currently support only --model sd3.5 (SD 3.5 Large)")

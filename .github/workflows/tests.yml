@@ -1,7 +1,7 @@
 # Test gate — run the repo's pytest suite on every PR.
 #
-# The green/red merge signal: `uv run --with pytest pytest tests/`. Dependency-free (uv only,
-# no secrets, no committed lockfile required). This is the check `gh ship` and the branch
+# The green/red merge signal: source-checkout pytest, with Pillow for image contracts.
+# No secrets or committed lockfile required. This is the check `gh ship` and the branch
 # ruleset wait on — a repo without it has nothing to gate merges on.
 #
 # INSTALL: copy to .github/workflows/tests.yml (rig does this from ci.items.tests).
@@ -21,8 +21,6 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded PR runs, but never cancel a main-baseline run mid-flight (a half-run
-# baseline on a protected branch is worse than a redundant one).
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -34,14 +32,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Cover both the requires-python floor (3.9 — the very reason the version
-        # resolver hand-parses pyproject instead of using tomllib) and a current line.
         python-version: ["3.9", "3.12"]
     env:
       TEST_PATHS: tests
-      TEST_EXTRA_DEPS: ""
-      # Pin the test runner so a new pytest major can't flip a green PR red on its own; bump
-      # deliberately. Override PYTEST_SPEC to track a different line.
+      TEST_EXTRA_DEPS: "Pillow"
       PYTEST_SPEC: "pytest>=8,<9"
     steps:
       - name: Checkout
@@ -62,8 +56,23 @@ jobs:
           extra=""
           for dep in ${TEST_EXTRA_DEPS}; do extra="${extra} --with ${dep}"; done
           # --no-project: run against the source checkout WITHOUT building/installing
-          # draw-cli as a dist, so the tests exercise the same symlink/pyproject-fallback
-          # path the tool uses in a real checkout (and don't need the heavy hf/Pillow deps).
+          # draw-cli as a dist. Live Codex tests are opt-in and skip in CI.
           # shellcheck disable=SC2086
           uv run --no-project --python "${{ matrix.python-version }}" \
             --with "${PYTEST_SPEC}" ${extra} pytest ${TEST_PATHS} -q
+
+  subscription-macos:
+    name: ChatGPT adapter (macOS, offline)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.12"
+      - name: Check subprocess, adversarial and docs contracts (offline)
+        run: >-
+          uv run --no-project --python 3.12 --with "pytest>=8,<9" --with Pillow
+          pytest tests/test_codex.py tests/test_adversarial.py tests/test_readme_contract.py
+          tests/test_smoke.py tests/test_version.py -q
