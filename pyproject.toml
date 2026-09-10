@@ -8,7 +8,7 @@ name = "draw-cli"
 # here at build time (see [tool.setuptools.dynamic] below), so it can never drift
 # between the package and the dist metadata.
 dynamic = ["version"]
-description = "Text-to-image from the CLI via APIs, local Diffusers or native Metal/GGUF."
+description = "Text-to-image via APIs, local Diffusers, native Metal/GGUF, or a ChatGPT subscription through Codex."
 requires-python = ">=3.9"
 dependencies = ["huggingface_hub>=0.34,<2", "Pillow"]
 
