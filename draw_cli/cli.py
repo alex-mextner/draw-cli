@@ -64,11 +64,10 @@ SKILL_MD = """\
 ---
 name: draw
 description: >-
-  Generate images via Hugging Face (FLUX by default), Stability API, local
-  Diffusers or stable-diffusion.cpp with Metal/GGUF and resource checks, or a
-  ChatGPT subscription through the local Codex CLI (--backend chatgpt/codex,
-  no API key). Use when a task needs an image created from a description in
-  the shell, e.g. `draw "a cute robot" -o robot.png`.
+  Generate images via Hugging Face (FLUX default), Stability API, local
+  Diffusers/stable-diffusion.cpp (Metal/GGUF), or a ChatGPT subscription through Codex
+  CLI (no API key). Use when a task needs an image created from a description in the
+  shell, e.g. `draw "a cute robot" -o robot.png`.
 metadata:
   author: alex-mextner
   repo: https://github.com/alex-mextner/draw-cli
