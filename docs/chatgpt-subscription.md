@@ -19,7 +19,7 @@ npm install -g @openai/codex@latest
 codex login
 codex login status
 
-pipx install --force git+https://github.com/alex-mextner/draw-cli
+pipx install --force git+https://git.hyperide.ai/ultrabricks/draw-cli
 draw install-skill
 draw --backend chatgpt --check
 ```

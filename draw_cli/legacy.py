@@ -66,7 +66,7 @@ description: >-
   shell without leaving the session, e.g. `draw "a cute robot" -o robot.png`.
 metadata:
   author: alex-mextner
-  repo: https://github.com/alex-mextner/draw-cli
+  repo: https://git.hyperide.ai/ultrabricks/draw-cli
 ---
 
 # draw — text-to-image from the CLI
@@ -209,7 +209,7 @@ def generate(prompt: str, model: str, out_path: str) -> None:
     except ImportError:
         sys.stderr.write(
             "draw: missing deps. Install via pipx (isolated): "
-            "pipx install --force git+https://github.com/alex-mextner/draw-cli\n"
+            "pipx install --force git+https://git.hyperide.ai/ultrabricks/draw-cli\n"
             "  — or: python3 -m pip install --user huggingface_hub Pillow\n"
         )
         sys.exit(1)

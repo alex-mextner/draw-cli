@@ -61,7 +61,7 @@ python -m pip install ".[sdcpp]"
 
 # To install the current PR branch with pipx, before it is merged:
 pipx install --force \
-  "draw-cli[sdcpp] @ git+https://github.com/alex-mextner/draw-cli@feat/sd35-api-local-resources"
+  "draw-cli[sdcpp] @ git+https://git.hyperide.ai/ultrabricks/draw-cli@feat/sd35-api-local-resources"
 ```
 
 The extra adds **psutil only** to the existing Hugging Face/Pillow dependencies.

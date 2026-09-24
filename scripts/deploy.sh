@@ -40,7 +40,7 @@ Usage:
 Environment:
   DRAW_DEPLOY_SKIP_PIPX=1        Skip the pipx refresh step (tests / symlink-only).
   DRAW_DEPLOY_EXPECTED_ORIGIN=U  Accept origin URL U instead of the official
-                                 github.com/alex-mextner/draw-cli repo (tests /
+                                 git.hyperide.ai/ultrabricks/draw-cli repo (tests /
                                  a deliberate mirror).
 
 Exit codes: 0 up-to-date/ahead/deployed · 1 usage/env/dirty/detached error · 2 non-fast-forward.
@@ -255,12 +255,12 @@ normalize_url() {
   u="${1%/}"
   u="${u%.git}"
   case "$u" in
-    git@github.com:*)       u="https://github.com/${u#git@github.com:}" ;;
-    ssh://git@github.com/*) u="https://github.com/${u#ssh://git@github.com/}" ;;
+    git@git.hyperide.ai:*)       u="https://git.hyperide.ai/${u#git@git.hyperide.ai:}" ;;
+    ssh://git@git.hyperide.ai/*) u="https://git.hyperide.ai/${u#ssh://git@git.hyperide.ai/}" ;;
   esac
   printf '%s\n' "$u"
 }
-expected_origin="${DRAW_DEPLOY_EXPECTED_ORIGIN:-https://github.com/alex-mextner/draw-cli}"
+expected_origin="${DRAW_DEPLOY_EXPECTED_ORIGIN:-https://git.hyperide.ai/ultrabricks/draw-cli}"
 if [ "$(normalize_url "$origin_url")" != "$(normalize_url "$expected_origin")" ]; then
   echo "deploy: origin points at '$origin_url', not the official repo" >&2
   echo "        ($expected_origin) — refusing to auto-install code from it." >&2

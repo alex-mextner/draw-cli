@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh — install the `draw` CLI (Python 3)
 # Works both from a local clone (./install.sh) and piped from curl:
-#   curl -fsSL https://raw.githubusercontent.com/alex-mextner/draw-cli/main/install.sh | bash
+#   curl -fsSL https://git.hyperide.ai/ultrabricks/draw-cli/raw/branch/main/install.sh | bash
 #
 # draw's Python runtime deps (huggingface_hub + Pillow) are installed here.
 # The optional ChatGPT backend additionally uses the separately installed Codex CLI.
@@ -9,7 +9,7 @@ set -euo pipefail
 
 TOOL="draw"
 REPO="draw-cli"
-GITHUB_USER="alex-mextner"
+FORGEJO_ORG="ultrabricks"
 ENTRY="bin/draw"
 CLONE_BASE="${XDG_DATA_HOME:-$HOME/.local/share}"
 
@@ -24,7 +24,7 @@ if [[ -n "$_script_dir" && -f "$_script_dir/$ENTRY" ]]; then
 else
   mkdir -p "$CLONE_BASE"
   CLONE_DIR="$CLONE_BASE/$REPO"
-  EXPECT_URL="https://github.com/$GITHUB_USER/$REPO.git"
+  EXPECT_URL="https://git.hyperide.ai/$FORGEJO_ORG/$REPO.git"
   if [[ -d "$CLONE_DIR/.git" ]]; then
     actual_url="$(git -C "$CLONE_DIR" remote get-url origin 2>/dev/null || echo "")"
     if [[ "$actual_url" != "$EXPECT_URL" ]]; then
@@ -81,7 +81,7 @@ else
       echo ""
       echo "  ERROR: could not install huggingface_hub / Pillow. draw requires them."
       echo "  Install manually: python3 -m pip install --user huggingface_hub Pillow"
-      echo "  Or use pipx:      pipx install git+https://github.com/$GITHUB_USER/$REPO"
+      echo "  Or use pipx:      pipx install git+https://git.hyperide.ai/$FORGEJO_ORG/$REPO"
       echo ""
       exit 1
     fi
@@ -135,5 +135,5 @@ echo "    draw \"a cute robot\" --backend chatgpt -o robot.png"
 echo ""
 echo "  Make ChatGPT the default with DRAW_BACKEND=chatgpt."
 echo "  Full usage: draw --help"
-echo "  Docs: https://github.com/$GITHUB_USER/$REPO#readme"
+echo "  Docs: https://git.hyperide.ai/$FORGEJO_ORG/$REPO#readme"
 echo ""

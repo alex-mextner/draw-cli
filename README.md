@@ -16,7 +16,7 @@ The default remains Hugging Face for backward compatibility. Set `DRAW_BACKEND=c
 npm install -g @openai/codex@latest
 codex login
 
-pipx install --force git+https://github.com/alex-mextner/draw-cli
+pipx install --force git+https://git.hyperide.ai/ultrabricks/draw-cli
 draw install-skill
 
 draw --backend chatgpt --check
@@ -89,14 +89,14 @@ draw needs `huggingface_hub>=0.34,<2` + `Pillow` at runtime, so the recommended 
 an isolated venv with the deps and `draw` on your PATH. API use does not install PyTorch:
 
 ```bash
-pipx install --force git+https://github.com/alex-mextner/draw-cli
+pipx install --force git+https://git.hyperide.ai/ultrabricks/draw-cli
 draw install-skill
 ```
 
 One-liner installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alex-mextner/draw-cli/main/install.sh | bash
+curl -fsSL https://git.hyperide.ai/ultrabricks/draw-cli/raw/branch/main/install.sh | bash
 ```
 
 For an existing legacy symlink install, upgrade its runtime dependencies too:
@@ -294,9 +294,9 @@ extra, not a large download imposed on every user. It deliberately does one thin
 
 Part of the [HyperIDE.ai](https://hyperide.ai) agent toolchain:
 
-- [tg-cli](https://github.com/alex-mextner/tg-cli) — Telegram CLI / agent bridge.
-- [review-cli](https://github.com/alex-mextner/review-cli) — multi-model read-only review tooling.
-- [rig-cli](https://github.com/alex-mextner/rig-cli) — dev-environment reconciliation and CI/skill setup.
-- [agent-tools](https://github.com/alex-mextner/agent-tools) — shared agent tools/catalog.
-- [3d-cli](https://github.com/alex-mextner/3d-cli) — scriptable FDM/3D workflow CLI.
+- [tg-cli](https://git.hyperide.ai/ultrabricks/tg-cli) — Telegram CLI / agent bridge.
+- [review-cli](https://git.hyperide.ai/ultrabricks/review-cli) — multi-model read-only review tooling.
+- [rig-cli](https://git.hyperide.ai/ultrabricks/rig-cli) — dev-environment reconciliation and CI/skill setup.
+- [agent-tools](https://git.hyperide.ai/ultrabricks/agent-tools) — shared agent tools/catalog.
+- [3d-cli](https://git.hyperide.ai/ultrabricks/3d-cli) — scriptable FDM/3D workflow CLI.
 - [hyperide.ai](https://hyperide.ai) — design/code tooling for React workflows.

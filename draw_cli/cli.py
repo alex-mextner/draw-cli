@@ -70,7 +70,7 @@ description: >-
   shell, e.g. `draw "a cute robot" -o robot.png`.
 metadata:
   author: alex-mextner
-  repo: https://github.com/alex-mextner/draw-cli
+  repo: https://git.hyperide.ai/ultrabricks/draw-cli
 ---
 
 # draw — text-to-image from the CLI

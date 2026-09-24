@@ -25,7 +25,7 @@ COMPONENTS = ("scheduler", "text_encoder", "text_encoder_2", "text_encoder_3",
 WEIGHT_COMPONENTS = ("text_encoder", "text_encoder_2", "text_encoder_3", "transformer", "vae")
 LOCAL_INSTALL = ('Install local dependencies in the draw environment: '
                  '`pipx inject draw-cli "draw-cli[local] @ '
-                 'git+https://github.com/alex-mextner/draw-cli"` '
+                 'git+https://git.hyperide.ai/ultrabricks/draw-cli"` '
                  '(or, from a checkout/venv: `python -m pip install ".[local]"`).')
 
 

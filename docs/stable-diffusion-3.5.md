@@ -44,10 +44,10 @@ Install the optional extra in the same environment as `draw`:
 python -m pip install ".[local]"
 
 # Alternative: new isolated pipx installation with the local extra:
-pipx install "draw-cli[local] @ git+https://github.com/alex-mextner/draw-cli"
+pipx install "draw-cli[local] @ git+https://git.hyperide.ai/ultrabricks/draw-cli"
 
 # Add the extra to an existing pipx installation:
-pipx inject draw-cli "draw-cli[local] @ git+https://github.com/alex-mextner/draw-cli"
+pipx inject draw-cli "draw-cli[local] @ git+https://git.hyperide.ai/ultrabricks/draw-cli"
 ```
 
 The base installation remains lightweight. The extra adds PyTorch, Diffusers,
