@@ -6,4 +6,4 @@ The CLI logic lives in draw_cli.cli; the console entry point is draw_cli.cli:mai
 install.sh symlink path.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.2"

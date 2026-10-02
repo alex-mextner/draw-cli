@@ -1,5 +1,5 @@
 """draw — generate images via Hugging Face, Stability API, local Diffusers, native
-Metal/GGUF, or a ChatGPT subscription through the local Codex CLI.
+Metal/GGUF, or ChatGPT through Codex or its browser UI.
 
 Usage:
     draw "a cute robot" -o robot.png
@@ -7,10 +7,12 @@ Usage:
     echo "a cute robot" | draw -o robot.png
     draw "a cute robot" --backend chatgpt -o robot.png
     draw --backend chatgpt --check
+    draw login
+    draw --backend chatgpt-web "a cute robot" -o robot.jpg
     draw --version
 
 Env:
-    DRAW_BACKEND    hf (default), api, stability, local, sdcpp, chatgpt or codex
+    DRAW_BACKEND    hf (default), api, stability, local, sdcpp, chatgpt, codex or chatgpt-web
     DRAW_CODEX_BIN  Path to Codex CLI (default: codex)
     HF_TOKEN        Hugging Face access token (HF backend only)
     HF_MODEL        Default model (default: black-forest-labs/FLUX.1-schnell)
@@ -66,7 +68,7 @@ name: draw
 description: >-
   Generate images via Hugging Face (FLUX default), Stability API, local
   Diffusers/stable-diffusion.cpp (Metal/GGUF), or a ChatGPT subscription through Codex
-  CLI (no API key). Use when a task needs an image created from a description in the
+  CLI or its browser UI (chatgpt-web, draw login). Use to create an image in the
   shell, e.g. `draw "a cute robot" -o robot.png`.
 metadata:
   author: alex-mextner
@@ -87,6 +89,8 @@ draw "..." --backend sdcpp --quantization q4_0 --seed 42 -o out.png
 draw "..." --backend chatgpt -o out.png              # ChatGPT subscription, no API key
 draw "..." --backend chatgpt -i ref.png -o out.png    # reference/edit
 draw --backend chatgpt --check                        # local Codex setup check
+draw login                                          # direct ChatGPT browser sign-in
+draw "..." --backend chatgpt-web -o out.jpg           # direct browser, not Codex
 ```
 
 API credentials: HF_TOKEN for Hugging Face, STABILITY_API_KEY for Stability.
@@ -109,7 +113,13 @@ ChatGPT (--backend chatgpt/codex) needs the current Codex CLI signed in with
 that .env to make it the default. Codex manages the image model: do not pass
 gpt-image IDs to --model or --codex-model. Image/version availability and
 limits follow the account rollout. Never fall back to a paid API or call draw
-recursively from its own Codex subprocess. Pair with `tg --photo out.png
+recursively from its own Codex subprocess.
+Direct ChatGPT UI mode: install the [browser] extra, run `draw login`, then use
+`--backend chatgpt-web`. A dedicated browser profile persists the user's session;
+no Desktop credentials or cookies are exported. Generation is headless unless
+--headed is supplied. Stop on quota, login or human checks; never bypass them.
+This experimental UI adapter may need updates when ChatGPT changes its controls.
+Pair with `tg --photo out.png
 "caption"` to send the result to Telegram.
 """
 SKILL_BLURB = (
@@ -180,16 +190,29 @@ def main() -> int:
     if sys.argv[1:] == ["install-skill"]:
         return install_skill()
     raw_args = list(sys.argv[1:])
+    if raw_args and raw_args[0] == "app-session":
+        from draw_cli.app_session import main as app_session_main
+        return app_session_main(raw_args[1:])
     _load_env()
+    if raw_args and raw_args[0] == "login":
+        login = argparse.ArgumentParser(prog="draw login", description="Sign in manually in draw's dedicated ChatGPT browser", allow_abbrev=False)
+        login.add_argument("--backend", choices=("chatgpt-web",), default="chatgpt-web")
+        login.add_argument("--browser-profile", default=os.environ.get("DRAW_BROWSER_PROFILE"))
+        login.add_argument("--browser-channel", choices=("chrome", "chromium"), default=os.environ.get("DRAW_BROWSER_CHANNEL", "chrome"))
+        login.add_argument("--timeout", type=_finite_float, default=600)
+        options = login.parse_args(raw_args[1:])
+        from draw_cli.chatgpt_web import run
+        return run(mode="login", profile=options.browser_profile, channel=options.browser_channel, timeout=options.timeout)
     from draw_cli.backends import ASPECT_RATIOS, SD35_MODEL, normalize_model, safe_error
     ap = argparse.ArgumentParser(description="Generate images via APIs, Diffusers, Metal/GGUF, or ChatGPT",
                                  allow_abbrev=False)
     ap.add_argument("-V", "--version", action="version", version=f"draw {__version__}")
     ap.add_argument("prompt", nargs="?", help="text prompt (or read from stdin)")
-    ap.add_argument("-o", "--out", help="output image path (required except for resource/Codex checks)")
-    ap.add_argument("--backend", choices=("hf", "api", "stability", "local", "sdcpp", "chatgpt", "codex"),
+    ap.add_argument("-o", "--out", help="output image path (required except for resource/browser/Codex checks)")
+    ap.add_argument("--backend", choices=("hf", "api", "stability", "local", "sdcpp", "chatgpt", "codex", "chatgpt-web"),
                     help="hf/api: Hugging Face; stability: Stability AI; local: Diffusers; "
-                         "sdcpp: native GGUF; chatgpt/codex: ChatGPT subscription via local Codex CLI")
+                         "sdcpp: native GGUF; codex: ChatGPT plan via Codex CLI; "
+                         "chatgpt: deprecated alias of codex; chatgpt-web: experimental browser UI")
     ap.add_argument("--model", help="HF model ID or sd3.5 alias; non-HF backends default to SD 3.5 Large; "
                                     "omit for chatgpt/codex (Codex manages the image model)")
     ap.add_argument("--provider", help="Hugging Face Inference Provider (default: auto)")
@@ -222,15 +245,36 @@ def main() -> int:
     ap.add_argument("-i", "--image", action="append", default=[],
                     help="reference/edit image; repeat up to five times (chatgpt/codex only)")
     ap.add_argument("--check", action="store_true",
-                    help="check Codex installation/login without generating an image (chatgpt/codex only)")
+                    help="check login without generating an image (chatgpt/codex: local; chatgpt-web: opens browser)")
+    ap.add_argument("--browser-profile", default=os.environ.get("DRAW_BROWSER_PROFILE"),
+                    help="dedicated draw browser profile, never a personal Chrome profile (chatgpt-web only)")
+    ap.add_argument("--browser-channel", choices=("chrome", "chromium"),
+                    default=os.environ.get("DRAW_BROWSER_CHANNEL", "chrome"), help="browser engine (chatgpt-web only)")
+    ap.add_argument("--headed", action="store_true", help="show the generation browser (chatgpt-web only; default headless)")
+    ap.add_argument("--cdp-url", help="explicit loopback endpoint of an already running, authorized browser/app (chatgpt-web only)")
+    ap.add_argument("--cdp-context", type=int, help="explicit existing context index when the app exposes more than one")
     args = ap.parse_args()
 
     backend = args.backend or os.environ.get("DRAW_BACKEND") or ("local" if args.check_resources else "hf")
     backend = "hf" if backend == "api" else backend
-    if backend not in ("hf", "stability", "local", "sdcpp", "chatgpt", "codex"):
-        ap.error("DRAW_BACKEND must be hf, api, stability, local, sdcpp, chatgpt or codex")
-    codex_backend = backend in ("chatgpt", "codex")
+    if backend not in ("hf", "stability", "local", "sdcpp", "chatgpt", "codex", "chatgpt-web"):
+        ap.error("DRAW_BACKEND must be hf, api, stability, local, sdcpp, chatgpt, codex or chatgpt-web")
+    if backend == "chatgpt":
+        sys.stderr.write(
+            "draw: 'chatgpt' is a deprecated alias of 'codex'; it uses the Codex allowance, "
+            "not a separate ChatGPT Images API. Use --backend codex (or DRAW_BACKEND=codex).\n"
+        )
+        backend = "codex"
+    codex_backend = backend == "codex"
     local_backend = backend in ("local", "sdcpp")
+    browser_backend = backend == "chatgpt-web"
+    if not browser_backend and any(_option_present(raw_args, flag) for flag in ("--browser-profile", "--browser-channel", "--headed", "--cdp-url", "--cdp-context")):
+        ap.error("browser options require --backend chatgpt-web")
+
+    if args.cdp_context is not None and (not args.cdp_url or args.cdp_context < 0):
+        ap.error("--cdp-context requires --cdp-url and a nonnegative index")
+    if args.cdp_url and any(_option_present(raw_args, flag) for flag in ("--browser-profile", "--browser-channel", "--headed")):
+        ap.error("CDP attaches to the existing app; browser launch controls cannot be combined with --cdp-url")
 
     explicit_codex_generation_flags = [
         flag for flag in ("--codex-model", "--timeout") if _option_present(raw_args, flag)
@@ -243,7 +287,7 @@ def main() -> int:
         if _option_present(raw_args, flag)
     ]
     if not codex_backend:
-        if args.image or args.check or explicit_codex_flags:
+        if args.image or (args.check and not browser_backend) or explicit_codex_flags:
             detail = ", ".join(explicit_codex_flags) if explicit_codex_flags else "--image/--check"
             ap.error(f"{detail} require --backend chatgpt (or codex)")
     else:
@@ -254,6 +298,12 @@ def main() -> int:
             )
         if hf_only_flags:
             ap.error(", ".join(hf_only_flags) + " require --backend hf/stability/local/sdcpp")
+
+    if browser_backend:
+        if args.model is not None:
+            ap.error("--model is not supported by the ChatGPT browser UI; the image model is service-managed")
+        if hf_only_flags:
+            ap.error(", ".join(hf_only_flags) + " are not supported by chatgpt-web")
 
     if args.check_resources and not local_backend:
         ap.error("--check-resources requires --backend local or sdcpp")
@@ -279,6 +329,22 @@ def main() -> int:
                  "use --aspect-ratio, or choose hf/local")
     if args.timeout is not None and (local_backend or args.timeout <= 0):
         ap.error("--timeout must be positive and applies only to API/Codex backends")
+
+    if browser_backend:
+        if args.check and (args.prompt is not None or args.out or args.image):
+            ap.error("--check does not accept a prompt, output path or reference images")
+        prompt = args.prompt
+        if not args.check:
+            if not args.out:
+                ap.error("the following arguments are required: -o/--out")
+            if not prompt and not sys.stdin.isatty():
+                prompt = sys.stdin.read(1024 * 1024 + 1).strip()
+            if not prompt:
+                ap.error("prompt is required (arg or stdin)")
+        from draw_cli.chatgpt_web import run
+        return run(mode="check" if args.check else "generate", prompt=prompt, out_path=args.out,
+                   profile=args.browser_profile, channel=args.browser_channel,
+                   headed=args.headed, timeout=args.timeout or 600, cdp_url=args.cdp_url, cdp_context=args.cdp_context)
 
     if codex_backend:
         if args.check:

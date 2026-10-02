@@ -8,12 +8,13 @@ name = "draw-cli"
 # here at build time (see [tool.setuptools.dynamic] below), so it can never drift
 # between the package and the dist metadata.
 dynamic = ["version"]
-description = "Text-to-image via APIs, local Diffusers, native Metal/GGUF, or a ChatGPT subscription through Codex."
+description = "Text-to-image via APIs, local Diffusers, native Metal/GGUF, or ChatGPT through Codex or its browser UI."
 requires-python = ">=3.9"
 dependencies = ["huggingface_hub>=0.34,<2", "Pillow"]
 
 # Heavy ML packages are opt-in; API-only and sdcpp installs never install PyTorch.
 [project.optional-dependencies]
+browser = ["playwright>=1.61,<2"]
 sdcpp = ["psutil>=5.9"]
 local = [
     "torch>=2.4",

@@ -86,6 +86,27 @@ def _diagnostic(text: str) -> str:
     return text.strip()[-1500:]
 
 
+def failure_message(code: int, output: str, stderr: str) -> str:
+    """Prefer the terminal JSONL error over nonfatal skill-budget warnings."""
+    messages = []
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") not in ("error", "turn.failed"):
+            continue
+        error = event.get("error") or event
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            messages.append(error["message"])
+    detail = _diagnostic(messages[-1] if messages else stderr or output)
+    if re.search(r"usage limit|quota|rate.limit|too many requests", detail, re.I):
+        return (f"Codex usage limit reached. {detail} "
+                "This is the Codex allowance; signing in again does not reset it. "
+                "No automatic retry. No API fallback was attempted.")
+    return f"Codex exited with status {code}: {detail}. No API fallback was attempted."
+
+
 def _stop(proc: subprocess.Popen) -> None:
     """Reap the child and terminate its process group on macOS/Linux."""
     try:
@@ -492,10 +513,7 @@ def generate(
             timeout=timeout,
         )
         if code:
-            raise CodexError(
-                f"Codex exited with status {code}: {_diagnostic(err or output)}. "
-                "No API fallback was attempted."
-            )
+            raise CodexError(failure_message(code, output, err))
         thread_id, message = _thread_result(output)
         try:
             data = _read_artifact(Path(installation.env["CODEX_HOME"]), workspace, thread_id)

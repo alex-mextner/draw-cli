@@ -10,6 +10,61 @@ without leaving the terminal.
 
 The default remains Hugging Face for backward compatibility. Set `DRAW_BACKEND=chatgpt` if you want ChatGPT/Codex to be the default.
 
+## Direct ChatGPT browser mode (experimental)
+
+`chatgpt-web` uses the ChatGPT website through a dedicated browser profile, not
+Codex. It does not read ChatGPT Desktop credentials or call a separately billed
+Images API. Image limits and availability remain controlled by ChatGPT.
+
+From a checkout, install the optional browser dependency in an isolated environment:
+
+```bash
+uv venv .venv
+uv pip install --python .venv/bin/python -e '.[browser]'
+.venv/bin/draw login
+.venv/bin/draw --backend chatgpt-web --check
+.venv/bin/draw --backend chatgpt-web 'airplane made by apple' -o airplane.jpg
+```
+
+`draw login` opens Google Chrome for you to sign in yourself. Its session persists
+only in draw's dedicated profile. Later generations are headless by default;
+`--headed` shows the browser. Existing personal browser profiles are not imported.
+A missing/expired session asks for `draw login`. Headless human checks and service
+limits stop the command. A headed window waits for you to complete a human check;
+there is no automatic retry, stealth, or private-API fallback.
+
+`codex` is the canonical selector for the Codex transport. The legacy `chatgpt`
+name is only a deprecated alias of `codex`; it has identical authentication,
+execution and usage accounting, and now prints a warning. It is **not** a separate
+ChatGPT Desktop/Images API backend. Existing commands keep the same transport.
+Use `--backend chatgpt-web` explicitly for the experimental browser mode, or set
+`DRAW_BACKEND=chatgpt-web` yourself.
+`draw` never changes the chosen provider after a quota error.
+
+This is a UI integration, **not an official subscription Images API**. If ChatGPT's
+controls change, it fails without submitting blindly or substituting a screenshot.
+See [browser setup, limitations and session handling](docs/chatgpt-browser.md).
+
+### Reuse a running app/browser session
+
+Version 0.6.2 adds an explicit session-attachment path, without exporting credentials:
+
+```bash
+draw app-session                          # credentials-free report under /tmp
+# After saving your work and quitting ChatGPT yourself:
+draw app-session --launch --probe-web-session
+# After the new-tab authentication probe succeeds:
+draw --backend chatgpt-web --cdp-url http://127.0.0.1:9236 'a cat' -o cat.jpg
+```
+
+This is UI automation over a local control connection, not a standalone private
+Images API. Multiple draw processes can own separate tabs in the same running
+browser. The app keeps its login and remains open after draw disconnects. App
+session reuse and live image-generation compatibility still require verification
+on the installed app. Enabling a debug port gives trusted local processes broad
+session control; never expose it to the network. See [setup and verification
+boundaries](docs/chatgpt-app-session.md).
+
 ## Quick start: ChatGPT plan, no API key
 
 ```bash
@@ -38,6 +93,10 @@ flowchart TD
     H --> HP[Selected backend pipeline]
     HP --> HS[Save requested output]
 
+    C -->|chatgpt-web| BW[Dedicated browser profile: draw login]
+    BW --> BU[ChatGPT UI: submit once and download original]
+    BU --> BV[Validate image and atomically encode PNG/JPEG/WebP]
+
     C -->|chatgpt / codex| V[Validate prompt, output path and references locally]
     R[0-5 reference images] --> V
     V --> P[Codex preflight: version, ChatGPT login, exec flags, image_generation feature]
@@ -56,7 +115,7 @@ flowchart TD
     Q -. invalid or ambiguous artifact .-> X
 ```
 
-For the ChatGPT path, `draw` does **not** extract browser cookies, copy Codex auth files, scrape tokens, or automate ChatGPT Desktop. Authentication remains owned by Codex in the existing `CODEX_HOME`. The child process receives a stripped environment without OpenAI/HF API-key overrides, runs in a fresh workspace, ignores user/project Codex config and rules for that turn, disables shell/web tools, and uses a read-only shell sandbox.
+For the Codex path, `draw` does **not** extract browser cookies, copy Codex auth files, scrape tokens, or automate ChatGPT Desktop. Authentication remains owned by Codex in the existing `CODEX_HOME`. The child process receives a stripped environment without OpenAI/HF API-key overrides, runs in a fresh workspace, ignores user/project Codex config and rules for that turn, disables shell/web tools, and uses a read-only shell sandbox.
 
 The prompt is sent through stdin, not a shell command. Explicit reference images are validated first and then re-encoded into the temporary workspace. The result is accepted only from the current Codex thread namespace (or the fresh workspace artifact directory), must be one regular non-hardlinked PNG of at most **32 MiB**, and must decode as a valid image. The requested output is replaced atomically only after validation succeeds.
 
@@ -205,14 +264,14 @@ cache accounting, offline operation and backend-specific options, and
 |---|---|---|---|
 | `prompt` | all | — | Prompt argument; reads stdin when omitted. |
 | `-o`, `--out` | all | required for generation | Output path. Not needed for `--check-resources`/`--check`. |
-| `--backend` | all | `hf` | `hf`/`api`, `stability`, `local`, `sdcpp`, `chatgpt`, or `codex` (alias of `chatgpt`). |
+| `--backend` | all | `hf` | `hf`/`api`, `stability`, `local`, `sdcpp`, `chatgpt`, `codex` (alias of `chatgpt`), or `chatgpt-web` (direct browser). |
 | `--model` | hf/stability/local/sdcpp | `HF_MODEL` / FLUX default; SD 3.5 Large otherwise | HF model ID or `sd3.5` alias. Rejected for `chatgpt`/`codex`. |
 | `--provider` | hf | `auto` | Hugging Face Inference Provider. HF only. |
 | `--negative-prompt`, `--seed` | hf/stability/local/sdcpp | backend default | Negative prompt; seed from 0 through 4294967295. |
 | `--width`, `--height` | hf/local | local: 1024 | HF/local dimensions; local must be multiples of 16. |
 | `--steps`, `--guidance-scale` | hf/local | local: 28 / 3.5 | HF/local generation controls. |
 | `--aspect-ratio` | stability | `1:1` | Direct Stability API only. |
-| `--timeout` | hf/stability/chatgpt/codex | 300s API, 600s ChatGPT/Codex | API or Codex generation timeout in seconds. |
+| `--timeout` | hf/stability/chatgpt/codex/chatgpt-web | 300s API, 600s ChatGPT | Generation timeout in seconds; browser accepts 1..3600. |
 | `--device` | local/sdcpp | `auto` | `cuda`, `cuda:N`, `mps`, `cpu`, `auto` (sdcpp: `auto`/`metal`/`mps`/`cpu`). |
 | `--dtype` | local | `auto` | `float16`, `bfloat16`, `float32`, `auto`. |
 | `--offload` | local | `auto` | `none`, `model`, `sequential`, `auto`. |
@@ -224,7 +283,10 @@ cache accounting, offline operation and backend-specific options, and
 | `-i`, `--image` | chatgpt/codex | — | Reference/edit image; repeat up to five times. |
 | `--codex-bin` | chatgpt/codex | `codex` | Codex executable path/name. |
 | `--codex-model` | chatgpt/codex generation | Codex default | Reasoning model, not image model. |
-| `--check` | chatgpt/codex | — | Local executable/login/capability preflight; no image generation. |
+| `--check` | chatgpt/codex/chatgpt-web | — | No generation: local Codex preflight or browser session check. |
+| `--browser-profile` | chatgpt-web / login | `~/.config/draw-cli/chatgpt-browser` | Dedicated profile; never a personal Chrome profile. |
+| `--browser-channel` | chatgpt-web / login | `chrome` | Installed Google Chrome, or explicitly installed `chromium`. |
+| `--headed` | chatgpt-web | off | Show the generation browser; login is always visible. |
 | `-V`, `--version` | all | — | Print version and exit. |
 
 Unsupported combinations fail explicitly rather than being silently ignored — for example, `--codex-model` with `--backend hf`, `--image`/`--check` without `--backend chatgpt`, or `--timeout` together with `--check`, is an argument error. Plain `--check-resources` selects `local` unless `--backend`/`DRAW_BACKEND` explicitly selects another backend.
@@ -233,7 +295,9 @@ Unsupported combinations fail explicitly rather than being silently ignored — 
 
 | Variable | Meaning |
 |---|---|
-| `DRAW_BACKEND` | Default backend: `hf`, `stability`, `local`, `sdcpp`, `chatgpt`, or `codex`; an explicit `--backend` flag wins. |
+| `DRAW_BACKEND` | Default backend: `hf`, `stability`, `local`, `sdcpp`, `chatgpt`, `codex`, or `chatgpt-web`; an explicit `--backend` flag wins. |
+| `DRAW_BROWSER_PROFILE` | Dedicated browser profile directory; session is kept locally by the browser. |
+| `DRAW_BROWSER_CHANNEL` | `chrome` (default) or `chromium`. |
 | `DRAW_CODEX_BIN` | Codex executable path/name. |
 | `DRAW_CODEX_MODEL` | Optional Codex reasoning model; not the image model. |
 | `CODEX_HOME` | Existing Codex home/auth location; defaults to `~/.codex`. |
