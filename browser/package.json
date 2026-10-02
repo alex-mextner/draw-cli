@@ -1,0 +1,1 @@
+{"name":"draw-chatgpt-browser-driver","private":true,"type":"module","dependencies":{"playwright":"1.63.0"},"scripts":{"test":"node --test test-driver.mjs"}}
