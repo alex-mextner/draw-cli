@@ -262,7 +262,10 @@ def main() -> int:
         if _option_present(raw_args, flag)
     ]
     if browser_backend:
-        if args.model is not None or hf_only_flags or explicit_codex_flags:
+        other_backend_flags = (args.provider, args.aspect_ratio, args.device, args.dtype, args.offload,
+                               args.cache_dir, args.revision, args.sdcpp_bin, args.quantization)
+        if (args.model is not None or hf_only_flags or explicit_codex_flags
+                or any(v is not None for v in other_backend_flags) or args.offline or args.check_resources):
             ap.error("chatgpt-browser takes only a prompt, -i/--image, -o, --timeout and --check "
                      "(no --model, codex or generation-tuning flags)")
     elif not codex_backend:

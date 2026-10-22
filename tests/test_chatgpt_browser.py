@@ -192,3 +192,16 @@ def test_cli_reads_prompt_from_stdin_and_rejects_blank(companion, tmp_path, monk
     with pytest.raises(SystemExit) as raised:
         cli.main()
     assert raised.value.code == 2
+
+
+def test_non_dict_error_is_a_clean_error():
+    with pytest.raises(cb.BrowserError, match="not a draw contract document"):
+        cb.parse_result(json.dumps({"ok": False, "error": "quota_exhausted"}), 4)
+
+
+def test_cli_rejects_other_backends_flags(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "argv", ["draw", "p", "--backend", "chatgpt-browser", "--device", "cuda",
+                                      "-o", str(tmp_path / "o.png")])
+    with pytest.raises(SystemExit) as raised:
+        cli.main()
+    assert raised.value.code == 2

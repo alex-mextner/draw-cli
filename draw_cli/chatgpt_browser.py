@@ -107,7 +107,8 @@ def parse_result(stdout: str, returncode: int) -> dict:
             continue
     if result is None:
         raise BrowserError(f"companion printed no JSON result (exit {returncode})")
-    if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
+    if (not isinstance(result, dict) or not isinstance(result.get("ok"), bool)
+            or (not result["ok"] and not isinstance(result.get("error"), dict))):
         raise BrowserError("companion result is not a draw contract document")
     expected = 0 if result["ok"] else EXIT_CODES.get((result.get("error") or {}).get("code"), -1)
     if returncode != expected:
