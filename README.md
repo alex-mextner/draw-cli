@@ -27,6 +27,23 @@ draw "a tiny astronaut cat, editorial illustration" --backend chatgpt -o cat.png
 
 There is **no API fallback**: if native Codex image generation is unavailable, refused, rate-limited, or fails, `draw` fails too. It does not silently switch to a separately billed OpenAI API request or to Hugging Face.
 
+## ChatGPT in the browser (`--backend chatgpt-browser`)
+
+For machines where Codex is unavailable but a logged-in ChatGPT is. `draw` does not automate the browser itself: it
+speaks the draw JSON contract (v1) to a companion command that owns a **dedicated** browser profile, a single-owner
+lock, human-paced sending, persisted quota state, and no stealth or captcha solving. The reference companion is
+[`hsw-editor draw run`](https://github.com/alex-mextner/hsw-editor/blob/main/docs/draw.md).
+
+```bash
+hsw-editor draw login chatgpt          # one time: log in in the window that opens, then close it
+draw --backend chatgpt-browser --check
+draw "orthographic side view, white background, no shadows" --backend chatgpt-browser -i box.png -o side.png
+```
+
+`DRAW_CHATGPT_BROWSER_CMD` overrides the companion (default `hsw-editor draw`). Failures are never retried: a logged-out
+profile, a quota limit (with the reset time) and a human-verification wall are each reported with the exact next step.
+Only `-i` (up to five), `-o`, `--timeout` and `--check` apply; reference photos leave your machine.
+
 ## How it works
 
 ```mermaid
